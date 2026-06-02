@@ -18,6 +18,7 @@ import {
 import { handleArticleLesson, handleAnswerFeedback, handlePromoteWords } from './articles';
 import { handleQrGenerate, handleQrAnalyze } from './qr';
 import { handleGetDailyPodcast, handleGeneratePodcast, generateAndStoreDailyPodcast } from './podcast';
+import { handleGetChannelLesson } from './channelLessons';
 
 export default {
   // ── Cron — podcast du jour (7h / 12h / 18h UTC) ─────────────────────────
@@ -111,6 +112,9 @@ export default {
     // ── Podcasts du jour (cron + on-demand) ─────────────────────────────────
     if (method === 'GET'  && path === '/podcasts/daily')    return handleGetDailyPodcast(req, env);
     if (method === 'POST' && path === '/podcasts/generate') return handleGeneratePodcast(req, env);
+
+    // ── Leçons YouTube (BBC Learning English / engVid) ───────────────────────
+    if (method === 'GET' && path === '/lessons/channel') return handleGetChannelLesson(req, env);
 
     // ── Q&R — expression écrite guidée ────────────────────────────────────
     if (method === 'POST' && path === '/qr/generate') return handleQrGenerate(req, env);
