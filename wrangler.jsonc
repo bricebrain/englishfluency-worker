@@ -17,6 +17,8 @@
 
   "vars": {},
 
+  // ── Cron — génération du podcast du jour (7h, 12h, 18h UTC)
+
   // ── Service Binding : accès direct au Worker TechPulse (même compte, zéro latence HTTP)
   "services": [
     { "binding": "TECHPULSE", "service": "techpulse-worker" }

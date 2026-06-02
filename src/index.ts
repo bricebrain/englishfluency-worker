@@ -17,8 +17,14 @@ import {
 } from './vocabulary';
 import { handleArticleLesson, handleAnswerFeedback, handlePromoteWords } from './articles';
 import { handleQrGenerate, handleQrAnalyze } from './qr';
+import { handleGetDailyPodcast, handleGeneratePodcast, generateAndStoreDailyPodcast } from './podcast';
 
 export default {
+  // ── Cron — podcast du jour (7h / 12h / 18h UTC) ─────────────────────────
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    await generateAndStoreDailyPodcast(env, 'B1').catch(() => {/* silently fail */});
+  },
+
   async fetch(req: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url    = new URL(req.url);
     const path   = url.pathname;
@@ -101,6 +107,10 @@ export default {
     if (method === 'POST' && path === '/articles/lesson')         return handleArticleLesson(req, env);
     if (method === 'POST' && path === '/articles/feedback')        return handleAnswerFeedback(req, env);
     if (method === 'POST' && path === '/articles/promote-words')   return handlePromoteWords(req, env);
+
+    // ── Podcasts du jour (cron + on-demand) ─────────────────────────────────
+    if (method === 'GET'  && path === '/podcasts/daily')    return handleGetDailyPodcast(req, env);
+    if (method === 'POST' && path === '/podcasts/generate') return handleGeneratePodcast(req, env);
 
     // ── Q&R — expression écrite guidée ────────────────────────────────────
     if (method === 'POST' && path === '/qr/generate') return handleQrGenerate(req, env);
