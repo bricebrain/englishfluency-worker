@@ -1,11 +1,13 @@
 /**
  * channelLessons.ts — Leçons pédagogiques générées depuis des vidéos YouTube.
  *
- * GET /lessons/channel?level=B1
- *   · Cherche en D1 la leçon du jour pour ce niveau
- *   · Sinon : fetch RSS BBC Learning English + engVid → pick vidéo → IA génère leçon
- *   · Stocke en D1 (type='channel_lesson', profile_id='__global__')
+ * GET  /lessons/channel?level=B1          — leçon du jour (cache D1 ou génération)
+ * GET  /admin/channels                    — liste toutes les chaînes
+ * POST /admin/channels                    — ajoute une chaîne  { id, name }
+ * PATCH /admin/channels/:id               — toggle active      { active: 0|1 }
+ * DELETE /admin/channels/:id              — supprime une chaîne
  *
+ * Les chaînes sont stockées dans la table D1 `youtube_channels`.
  * Pas de clé YouTube requise — utilise les flux RSS publics.
  */
 
@@ -41,12 +43,85 @@ interface YtVideo {
   channelName: string;
 }
 
-// ─── Channels ─────────────────────────────────────────────────────────────────
+interface ChannelRow {
+  id:         string;
+  name:       string;
+  active:     number;
+  created_at: string;
+}
 
-const CHANNELS = [
-  { id: 'UCHaHD477h-FeBbVh9Sh7syA', name: 'BBC Learning English' },
-  { id: 'UCKRBA9XfgzAtJodE4t8cUeg', name: 'engVid' },
-];
+// ─── D1 channel management ────────────────────────────────────────────────────
+
+async function getActiveChannels(env: Env): Promise<{ id: string; name: string }[]> {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, name FROM youtube_channels WHERE active = 1 ORDER BY created_at ASC`,
+    ).all<{ id: string; name: string }>();
+    return results ?? [];
+  } catch {
+    // Fallback si la table n'existe pas encore (migration pas encore appliquée)
+    return [
+      { id: 'UCHaHD477h-FeBbVh9Sh7syA', name: 'BBC Learning English' },
+      { id: 'UCKRBA9XfgzAtJodE4t8cUeg', name: 'engVid' },
+    ];
+  }
+}
+
+// ─── Admin handlers ───────────────────────────────────────────────────────────
+
+/** GET /admin/channels */
+export async function handleListChannels(_req: Request, env: Env): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, name, active, created_at FROM youtube_channels ORDER BY created_at ASC`,
+  ).all<ChannelRow>();
+  return json({ channels: results ?? [] });
+}
+
+/** POST /admin/channels  body: { id, name } */
+export async function handleAddChannel(req: Request, env: Env): Promise<Response> {
+  const body = await req.json<{ id?: string; name?: string }>().catch(() => null);
+  if (!body?.id || !body?.name) return err('Champs requis : id, name', 400);
+
+  const channelId = body.id.trim();
+  const name      = body.name.trim();
+
+  // Vérifie que le flux RSS existe
+  const test = await fetch(
+    `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`,
+    { headers: { 'User-Agent': 'Mozilla/5.0' } },
+  );
+  if (!test.ok) return err(`Channel introuvable (RSS ${test.status}). Vérifie l'ID.`, 422);
+
+  await env.DB.prepare(
+    `INSERT INTO youtube_channels (id, name, active) VALUES (?, ?, 1)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, active = 1`,
+  ).bind(channelId, name).run();
+
+  return json({ ok: true, id: channelId, name });
+}
+
+/** PATCH /admin/channels/:id  body: { active: 0|1 } */
+export async function handleToggleChannel(req: Request, env: Env, channelId: string): Promise<Response> {
+  const body = await req.json<{ active?: number }>().catch(() => null);
+  if (body?.active === undefined) return err('Champ requis : active (0 ou 1)', 400);
+
+  const result = await env.DB.prepare(
+    `UPDATE youtube_channels SET active = ? WHERE id = ?`,
+  ).bind(body.active ? 1 : 0, channelId).run();
+
+  if (!result.meta.changes) return err('Chaîne introuvable', 404);
+  return json({ ok: true, id: channelId, active: body.active ? 1 : 0 });
+}
+
+/** DELETE /admin/channels/:id */
+export async function handleDeleteChannel(_req: Request, env: Env, channelId: string): Promise<Response> {
+  const result = await env.DB.prepare(
+    `DELETE FROM youtube_channels WHERE id = ?`,
+  ).bind(channelId).run();
+
+  if (!result.meta.changes) return err('Chaîne introuvable', 404);
+  return json({ ok: true, deleted: channelId });
+}
 
 // ─── RSS parsing ──────────────────────────────────────────────────────────────
 
@@ -301,9 +376,13 @@ export async function generateAndStoreChannelLesson(
   env: Env,
   level = 'B1',
 ): Promise<ChannelLesson | null> {
+  // Récupère les chaînes actives depuis D1
+  const channels = await getActiveChannels(env);
+  if (!channels.length) return null;
+
   // Fetch videos from all channels in parallel
   const results = await Promise.all(
-    CHANNELS.map((ch) => fetchChannelVideos(ch.id, ch.name)),
+    channels.map((ch) => fetchChannelVideos(ch.id, ch.name)),
   );
   const allVideos: YtVideo[] = results.flat();
   if (!allVideos.length) return null;

@@ -18,7 +18,13 @@ import {
 import { handleArticleLesson, handleAnswerFeedback, handlePromoteWords } from './articles';
 import { handleQrGenerate, handleQrAnalyze } from './qr';
 import { handleGetDailyPodcast, handleGeneratePodcast, generateAndStoreDailyPodcast } from './podcast';
-import { handleGetChannelLesson } from './channelLessons';
+import {
+  handleGetChannelLesson,
+  handleListChannels,
+  handleAddChannel,
+  handleToggleChannel,
+  handleDeleteChannel,
+} from './channelLessons';
 
 export default {
   // ── Cron — podcast du jour (7h / 12h / 18h UTC) ─────────────────────────
@@ -114,7 +120,13 @@ export default {
     if (method === 'POST' && path === '/podcasts/generate') return handleGeneratePodcast(req, env);
 
     // ── Leçons YouTube (BBC Learning English / engVid) ───────────────────────
-    if (method === 'GET' && path === '/lessons/channel') return handleGetChannelLesson(req, env);
+    if (method === 'GET'    && path === '/lessons/channel')              return handleGetChannelLesson(req, env);
+
+    // ── Admin : gestion des chaînes YouTube ──────────────────────────────────
+    if (method === 'GET'    && path === '/admin/channels')               return handleListChannels(req, env);
+    if (method === 'POST'   && path === '/admin/channels')               return handleAddChannel(req, env);
+    if (method === 'PATCH'  && path.startsWith('/admin/channels/'))      return handleToggleChannel(req, env, path.slice('/admin/channels/'.length));
+    if (method === 'DELETE' && path.startsWith('/admin/channels/'))      return handleDeleteChannel(req, env, path.slice('/admin/channels/'.length));
 
     // ── Q&R — expression écrite guidée ────────────────────────────────────
     if (method === 'POST' && path === '/qr/generate') return handleQrGenerate(req, env);
