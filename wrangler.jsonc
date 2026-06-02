@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "englishfluency-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "englishfluency",
+      "database_id": "304a84c8-49c9-446b-b7ce-be18a3765bce",
+      "migrations_dir": "./migrations"
+    }
+  ],
+
+  "vars": {},
+
+  // ── Service Binding : accès direct au Worker TechPulse (même compte, zéro latence HTTP)
+  "services": [
+    { "binding": "TECHPULSE", "service": "techpulse-worker" }
+  ],
+
+  "r2_buckets": [
+    { "binding": "AUDIO", "bucket_name": "englishfluency-audio" }
+  ],
+
+  // Secrets API — Cloudflare Secrets Store (partagés entre workers du même compte, zéro duplication)
+  "secrets_store_secrets": [
+    { "binding": "OPENAI_API_KEY",     "store_id": "dee352e477854af6896293b6955e3824", "secret_name": "OPENAI_API_KEY" },
+    { "binding": "OPENROUTER_API_KEY", "store_id": "dee352e477854af6896293b6955e3824", "secret_name": "OPENROUTER_API_KEY" },
+    { "binding": "GEMINI_API_KEY",     "store_id": "dee352e477854af6896293b6955e3824", "secret_name": "GEMINI_API_KEY" },
+    { "binding": "GROQ_API_KEY_1",     "store_id": "dee352e477854af6896293b6955e3824", "secret_name": "GROQ_API_KEY_1" },
+    { "binding": "GROQ_API_KEY_2",     "store_id": "dee352e477854af6896293b6955e3824", "secret_name": "GROQ_API_KEY_2" },
+    { "binding": "DEEPSEEK_API_KEY",   "store_id": "dee352e477854af6896293b6955e3824", "secret_name": "DEEPSEEK_API_KEY" },
+    { "binding": "XAI_API_KEY",        "store_id": "dee352e477854af6896293b6955e3824", "secret_name": "XAI_API_KEY" }
+  ]
+}
