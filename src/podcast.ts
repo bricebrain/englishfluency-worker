@@ -225,8 +225,8 @@ async function fetchEnglishArticles(env: Env, limit = 10): Promise<TechPulseArti
       new Request(`http://techpulse/articles/recent?hours=12&limit=${limit}`),
     );
     if (!res.ok) return [];
-    const data = await res.json<{ items?: TechPulseArticle[] }>().catch(() => ({ items: [] }));
-    const articles = data?.items ?? (Array.isArray(data) ? (data as TechPulseArticle[]) : []);
+    const data = await res.json<{ articles?: TechPulseArticle[] }>().catch(() => ({ articles: [] }));
+    const articles = data?.articles ?? (Array.isArray(data) ? (data as TechPulseArticle[]) : []);
     return articles.filter((a) => looksEnglish(a.title));
   } catch {
     return [];
