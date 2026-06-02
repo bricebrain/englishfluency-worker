@@ -17,6 +17,7 @@ import {
 } from './vocabulary';
 import { handleArticleLesson, handleAnswerFeedback, handlePromoteWords } from './articles';
 import { handleQrGenerate, handleQrAnalyze } from './qr';
+import { handleSpeakAnalyze } from './speak';
 import { handleGetDailyPodcast, handleGeneratePodcast, generateAndStoreDailyPodcast } from './podcast';
 import {
   handleGetChannelLesson,
@@ -131,6 +132,9 @@ export default {
     // ── Q&R — expression écrite guidée ────────────────────────────────────
     if (method === 'POST' && path === '/qr/generate') return handleQrGenerate(req, env);
     if (method === 'POST' && path === '/qr/analyze')  return handleQrAnalyze(req, env);
+
+    // ── Parler — transcription + analyse vocale ───────────────────────────
+    if (method === 'POST' && path === '/speak/analyze') return handleSpeakAnalyze(req, env);
     if (method === 'GET' && path === '/articles') {
       const hours = url.searchParams.get('hours') ?? '24';
       const limit = Math.min(Number(url.searchParams.get('limit') ?? '15'), 30);
