@@ -44,8 +44,8 @@ interface YtVideo {
 // ─── Channels ─────────────────────────────────────────────────────────────────
 
 const CHANNELS = [
-  { id: 'UCVHFbw7woebKtFFljnmh0aA', name: 'BBC Learning English' },
-  { id: 'UCJ5p_jgis5ne80NQa7_xjEw', name: 'engVid' },
+  { id: 'UCHaHD477h-FeBbVh9Sh7syA', name: 'BBC Learning English' },
+  { id: 'UCKRBA9XfgzAtJodE4t8cUeg', name: 'engVid' },
 ];
 
 // ─── RSS parsing ──────────────────────────────────────────────────────────────
