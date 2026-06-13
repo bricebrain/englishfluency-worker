@@ -80,11 +80,17 @@ interface PreparedCard {
   inputPlaceholder: string;
   source: 'remote' | 'local';
   schemaVersion: number;
+  qualityReasons?: string[];
+  qualityScore?: number;
+  qualityStatus?: 'valid' | 'rebuilt' | 'needs_regeneration';
 }
 
 interface CardQuality {
   isValid: boolean;
+  needsRegeneration: boolean;
   reasons: string[];
+  score: number;
+  sourceQuality: 'local_validated' | 'remote_validated' | 'remote_rejected';
 }
 
 const SELECT_WORD = `
@@ -188,6 +194,9 @@ function buildLocalPreparedCard(word: PreparedWord): PreparedCard {
     inputPlaceholder: targetPos === 'verb' ? 'Ecris la bonne forme verbale' : 'Ecris le mot manquant',
     source: 'local',
     schemaVersion: SCHEMA_VERSION,
+    qualityReasons: [],
+    qualityScore: 0.72,
+    qualityStatus: 'rebuilt',
   };
 }
 
@@ -260,6 +269,63 @@ function sanitizeCardHint(word: PreparedWord, card: PreparedCard): PreparedCard 
   };
 }
 
+function wordCount(value: string): number {
+  return value.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function isArtificialSentence(sentence: string, word: PreparedWord): boolean {
+  const normalized = normalize(sentence);
+  const lemma = normalize(word.mot);
+
+  const patterns = [
+    /\bher explanation was clear and\b/i,
+    /\bit was a .* decision for the team\b/i,
+    /\bi use .* in a simple english sentence\b/i,
+    /\bthis is a clear sentence\b/i,
+    /\btry adding .* to make your sentence more precise\b/i,
+  ];
+
+  if (patterns.some((pattern) => pattern.test(sentence))) return true;
+  if (normalized === `i use ${lemma} in a simple english sentence`) return true;
+
+  return false;
+}
+
+function hasTranslationSignal(card: PreparedCard, word: PreparedWord): boolean {
+  const translation = normalize(word.traduction ?? '');
+  if (!translation) return true;
+  const cardTranslation = normalize(card.translationFr);
+  return translation
+    .split(/\s+/)
+    .filter((token) => token.length >= 3)
+    .some((token) => cardTranslation.includes(token));
+}
+
+function qualityScoreFromReasons(reasons: string[], source: PreparedCard['source']): number {
+  const critical = new Set([
+    'answer_not_in_sentence',
+    'full_sentence_contains_gap',
+    'missing_answer',
+    'missing_gap',
+    'missing_sentence',
+    'target_pos_should_be_other',
+    'target_pos_should_be_verb',
+  ]);
+  const penalty = reasons.reduce((sum, reason) => sum + (critical.has(reason) ? 0.28 : 0.12), 0);
+  const sourceBonus = source === 'remote' ? 0.05 : 0;
+  return Math.max(0, Math.min(1, 0.92 + sourceBonus - penalty));
+}
+
+function missingWordQuality(): CardQuality {
+  return {
+    isValid: false,
+    needsRegeneration: true,
+    reasons: ['word_missing'],
+    score: 0,
+    sourceQuality: 'remote_rejected',
+  };
+}
+
 function buildGap(sentenceFull: string, answer: string): string {
   const pattern = new RegExp(`\\b${escapeRegex(answer)}\\b`, 'i');
   if (pattern.test(sentenceFull)) return sentenceFull.replace(pattern, '____');
@@ -314,10 +380,33 @@ function assessCardQuality(word: PreparedWord, card: PreparedCard): CardQuality 
   if (/\b(clear and afraid|simple and afraid|natural and afraid)\b/i.test(card.sentenceFull)) {
     reasons.push('unnatural_known_pattern');
   }
+  if (isArtificialSentence(card.sentenceFull, word)) reasons.push('artificial_sentence');
+  if (wordCount(card.sentenceFull) < 3) reasons.push('sentence_too_short');
+  if (wordCount(card.sentenceFull) > 22) reasons.push('sentence_too_long');
+  if (!hasTranslationSignal(card, word)) reasons.push('translation_mismatch');
+
+  const score = qualityScoreFromReasons(reasons, card.source);
+  const needsRegeneration = reasons.some((reason) => [
+    'answer_not_in_sentence',
+    'artificial_sentence',
+    'full_sentence_contains_gap',
+    'lexical_answer_differs_from_lemma',
+    'target_pos_should_be_other',
+    'target_pos_should_be_verb',
+    'unnatural_known_pattern',
+  ].includes(reason));
+  const isValid = reasons.length === 0 || (!needsRegeneration && score >= 0.7);
 
   return {
-    isValid: reasons.length === 0,
+    isValid,
+    needsRegeneration,
     reasons,
+    score,
+    sourceQuality: card.source === 'remote' && needsRegeneration
+      ? 'remote_rejected'
+      : card.source === 'remote'
+        ? 'remote_validated'
+        : 'local_validated',
   };
 }
 
@@ -409,10 +498,17 @@ async function loadPreparedCards(
   for (const row of existing.results) {
     const word = words.find((candidate) => candidate.id === row.word_id);
     const card = serializeCard(row);
-    const quality = word ? assessCardQuality(word, card) : { isValid: false, reasons: ['word_missing'] };
+    const quality = word ? assessCardQuality(word, card) : missingWordQuality();
 
     if (quality.isValid || !options.forceRebuildInvalid) {
-      const safeCard = word ? sanitizeCardHint(word, card) : card;
+      const safeCard = word
+        ? {
+          ...sanitizeCardHint(word, card),
+          qualityReasons: quality.reasons,
+          qualityScore: quality.score,
+          qualityStatus: quality.isValid ? 'valid' as const : 'needs_regeneration' as const,
+        }
+        : card;
       byWordId.set(row.word_id, safeCard);
       reused += 1;
     } else {
@@ -427,7 +523,14 @@ async function loadPreparedCards(
   if (missingCards.length) {
     await env.DB.batch(missingCards.map((card) => upsertCardStatement(env, profileId, card)));
     for (const card of missingCards) {
-      byWordId.set(card.wordId, card);
+      const word = words.find((candidate) => candidate.id === card.wordId);
+      const quality = word ? assessCardQuality(word, card) : null;
+      byWordId.set(card.wordId, {
+        ...card,
+        qualityReasons: quality?.reasons ?? [],
+        qualityScore: quality?.score ?? card.qualityScore,
+        qualityStatus: 'rebuilt',
+      });
     }
   }
 
@@ -459,8 +562,16 @@ export async function handleLingvistSession(req: Request, env: Env): Promise<Res
       remoteCards: cards.filter((card) => card.source === 'remote').length,
       rebuiltCards: preparation.rebuilt,
       reusedCards: preparation.reused,
+      qualityAverage: averageQuality(cards),
+      needsRegeneration: cards.filter((card) => card.qualityStatus === 'needs_regeneration').length,
     },
   });
+}
+
+function averageQuality(cards: PreparedCard[]): number {
+  if (!cards.length) return 0;
+  const total = cards.reduce((sum, card) => sum + (card.qualityScore ?? 0.7), 0);
+  return Math.round((total / cards.length) * 100) / 100;
 }
 
 export async function handleLingvistPrepare(req: Request, env: Env): Promise<Response> {
@@ -487,6 +598,8 @@ export async function handleLingvistPrepare(req: Request, env: Env): Promise<Res
       rejectedCards: preparation.rejected.length,
       localCards: preparation.cards.filter((card) => card.source === 'local').length,
       remoteCards: preparation.cards.filter((card) => card.source === 'remote').length,
+      qualityAverage: averageQuality(preparation.cards),
+      needsRegeneration: preparation.cards.filter((card) => card.qualityStatus === 'needs_regeneration').length,
     },
     rejected: preparation.rejected,
     audioBookLessons: {
