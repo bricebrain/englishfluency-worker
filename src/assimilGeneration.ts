@@ -115,7 +115,8 @@ export async function generateAssimilArtifact(
         { role: 'user', content: buildPrompt(index, level, transcript) },
       ],
       temperature: 0.25,
-      max_tokens: 3200,
+      max_tokens: 5200,
+      response_format: { type: 'json_object' },
     }),
   }).catch((error) => {
     throw new AssimilGenerationError(error instanceof Error ? error.message : 'DeepSeek fetch failed');

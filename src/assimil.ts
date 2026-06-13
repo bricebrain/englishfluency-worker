@@ -3,6 +3,7 @@ import { err, isAuthorized, json } from './utils';
 import { AssimilGenerationError, generateAssimilArtifact } from './assimilGeneration';
 import { OpenAITranscriptionError, transcribeWithOpenAI } from './assimilOpenAI';
 import { RunPodTranscriptionError, normalizeRunPodApiKey, transcribeWithRunPod } from './assimilRunpod';
+import { cleanAssimilTranscript } from './assimilTranscript';
 import {
   LESSON_PREFIX,
   type AssimilLevel,
@@ -138,12 +139,13 @@ export async function handleUpsertAssimilTranscript(req: Request, env: Env, rawI
 
   const transcript = body?.transcript?.trim();
   if (!transcript || transcript.length < 20) return err('transcript requis', 400);
+  const cleanedTranscript = cleanAssimilTranscript(transcript);
 
   await upsertAssimilLesson(env, index, {
     status: 'transcript_ready',
     titleEn: body?.titleEn ?? null,
     titleFr: body?.titleFr ?? null,
-    transcript,
+    transcript: cleanedTranscript,
     transcriptSource: body?.transcriptSource ?? 'manual',
   });
 
@@ -220,12 +222,13 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
 
   await upsertAssimilLesson(env, index, {
     status: 'transcript_ready',
-    transcript: transcription.text,
+    transcript: cleanAssimilTranscript(transcription.text),
     transcriptSource: `${provider}:${transcription.model}`,
   });
 
   if (body?.generate) {
-    const artifactResult = await generateArtifactResponse(env, index, base.level, transcription.text);
+    const cleanedTranscript = cleanAssimilTranscript(transcription.text);
+    const artifactResult = await generateArtifactResponse(env, index, base.level, cleanedTranscript);
     if (!artifactResult.ok) return artifactResult.response;
     const { artifact } = artifactResult;
     if (artifact) {
@@ -233,7 +236,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
         status: 'generated',
         titleEn: artifact.titleEn,
         titleFr: artifact.titleFr,
-        transcript: transcription.text,
+        transcript: cleanedTranscript,
         transcriptSource: `${provider}:${transcription.model}`,
         artifact,
         generatedBy: 'deepseek-v4-flash',
