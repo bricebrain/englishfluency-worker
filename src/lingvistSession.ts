@@ -193,7 +193,7 @@ function buildLocalPreparedCard(word: PreparedWord): PreparedCard {
 
 function isVerbLike(type: string | null): boolean {
   const lower = (type ?? '').toLowerCase();
-  return lower.includes('v.') || lower.includes('verb') || lower.includes('modal');
+  return /(^|[^a-z])v\.?($|[^a-z])/.test(lower) || /\bverb\b/.test(lower) || /\bmodal\b/.test(lower);
 }
 
 function pickAnswer(lemma: string, sentenceFull: string): string {
@@ -232,10 +232,23 @@ function buildSafeGrammarHint(
   return `Cible: mot lexical.${meaning} Complete avec le mot le plus naturel dans le contexte.`;
 }
 
+function isUnsafeVerbLabel(label: string | null): boolean {
+  if (!label) return false;
+  return /-|→|irrégulier|irregulier|mot cible|lemma|answer|choisir|choose|chosen/i.test(label);
+}
+
+function safeVerbLabel(card: PreparedCard): string {
+  if (card.verbFormLabel && !isUnsafeVerbLabel(card.verbFormLabel)) {
+    return card.verbFormLabel;
+  }
+
+  return inferVerbLabel(card.sentenceFull, card.expectedAnswer);
+}
+
 function sanitizeCardHint(word: PreparedWord, card: PreparedCard): PreparedCard {
   const expectedTargetPos = isVerbLike(word.type) ? 'verb' : 'other';
   const expectedVerbForm = expectedTargetPos === 'verb'
-    ? card.verbFormLabel ?? inferVerbLabel(card.sentenceFull, card.expectedAnswer)
+    ? safeVerbLabel(card)
     : null;
 
   return {
