@@ -31,6 +31,7 @@ import {
   handleDeleteChannel,
 } from './channelLessons';
 import { handleGetDailyMission, handleGetLearningInsights, handleTrackLearningEvent } from './learning';
+import { handleAssimilLessons } from './assimil';
 
 export default {
   // ── Cron — podcast du jour (7h / 12h / 18h UTC) ─────────────────────────
@@ -77,6 +78,7 @@ export default {
       const key = path.slice('/audio/'.length);
       return handleServeAudio(req, env, key);
     }
+    if (method === 'GET' && path === '/assimil/lessons') return handleAssimilLessons(req, env);
 
     // ── Profils ──────────────────────────────────────────────────────────
     if (method === 'GET'    && path === '/profiles')          return handleListProfiles(req, env);
