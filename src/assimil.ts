@@ -1,7 +1,7 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
 import { generateAssimilArtifact } from './assimilGeneration';
-import { RunPodTranscriptionError, transcribeWithRunPod } from './assimilRunpod';
+import { RunPodTranscriptionError, normalizeRunPodApiKey, transcribeWithRunPod } from './assimilRunpod';
 import {
   LESSON_PREFIX,
   TOTAL_LESSONS,
@@ -68,6 +68,23 @@ export async function handleGetAssimilLesson(_req: Request, env: Env, rawIndex: 
 
   const row = await getAssimilLessonRow(env, index);
   return json({ lesson: rowToLesson(row, index) });
+}
+
+export async function handleAssimilRunPodStatus(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const rawApiKey = env.RUNPOD_API_KEY ?? '';
+  const normalizedApiKey = normalizeRunPodApiKey(rawApiKey);
+  const endpointId = env.RUNPOD_AI_ENDPOINT_ID?.trim() ?? '';
+
+  return json({
+    ok: true,
+    hasApiKey: Boolean(rawApiKey),
+    rawApiKeyLength: rawApiKey.length,
+    normalizedApiKeyLength: normalizedApiKey.length,
+    hasEndpointId: Boolean(endpointId),
+    endpointId,
+  });
 }
 
 export async function handleUpsertAssimilTranscript(req: Request, env: Env, rawIndex: string): Promise<Response> {

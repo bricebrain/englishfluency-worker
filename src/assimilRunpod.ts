@@ -57,15 +57,25 @@ function normalizeRunPodOutput(data: RunPodEnvelope): RunPodWhisperOutput {
   return data.output.output;
 }
 
-function normalizeRunPodApiKey(rawKey: string): string {
-  return rawKey.trim().replace(/^Bearer\s+/i, '').trim();
+export function normalizeRunPodApiKey(rawKey: string): string {
+  return rawKey
+    .trim()
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/^RUNPOD_API_KEY\s*=\s*/i, '')
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .trim();
 }
 
-function runPodHttpError(status: number, body: string): RunPodTranscriptionError {
+function runPodHttpError(
+  status: number,
+  body: string,
+  diagnostics: { endpointId: string; apiKeyLength: number },
+): RunPodTranscriptionError {
   const preview = body.slice(0, 180);
   if (status === 401 || status === 403) {
     return new RunPodTranscriptionError(
-      `RunPod HTTP ${status}: autorisation refusee. Verifie que RUNPOD_API_KEY est la cle API brute du meme compte RunPod, sans prefixe Bearer, et que l'endpoint appartient a ce compte. ${preview}`,
+      `RunPod HTTP ${status}: autorisation refusee. endpoint=${diagnostics.endpointId}, keyLength=${diagnostics.apiKeyLength}. Verifie que RUNPOD_API_KEY est la cle API brute du meme compte RunPod et que l'endpoint appartient a ce compte. ${preview}`,
     );
   }
   return new RunPodTranscriptionError(`RunPod HTTP ${status}: ${preview}`);
@@ -87,7 +97,8 @@ export async function transcribeWithRunPod(
   }
 
   const runpodApiKey = normalizeRunPodApiKey(env.RUNPOD_API_KEY);
-  const res = await fetch(`https://api.runpod.ai/v2/${env.RUNPOD_AI_ENDPOINT_ID}/runsync`, {
+  const endpointId = env.RUNPOD_AI_ENDPOINT_ID.trim();
+  const res = await fetch(`https://api.runpod.ai/v2/${endpointId}/runsync`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${runpodApiKey}`,
@@ -104,13 +115,17 @@ export async function transcribeWithRunPod(
           'English audio lesson for French learners. Clear short educational sentences.',
       },
     }),
+    signal: AbortSignal.timeout(180_000),
   }).catch((error) => {
     throw new RunPodTranscriptionError(error instanceof Error ? error.message : 'RunPod fetch failed');
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw runPodHttpError(res.status, text);
+    throw runPodHttpError(res.status, text, {
+      endpointId,
+      apiKeyLength: runpodApiKey.length,
+    });
   }
   const data = await res.json<RunPodEnvelope>().catch(() => null);
   if (!data) throw new RunPodTranscriptionError('RunPod JSON invalide');

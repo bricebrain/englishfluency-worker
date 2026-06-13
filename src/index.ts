@@ -32,6 +32,7 @@ import {
 } from './channelLessons';
 import { handleGetDailyMission, handleGetLearningInsights, handleTrackLearningEvent } from './learning';
 import {
+  handleAssimilRunPodStatus,
   handleAssimilLessons,
   handleGenerateAssimilLesson,
   handleGetAssimilLesson,
@@ -85,6 +86,7 @@ export default {
       return handleServeAudio(req, env, key);
     }
     if (method === 'GET' && path === '/assimil/lessons') return handleAssimilLessons(req, env);
+    if (method === 'GET' && path === '/assimil/runpod/status') return handleAssimilRunPodStatus(req, env);
     if (method === 'GET' && path.match(/^\/assimil\/lesson\/\d+$/)) {
       return handleGetAssimilLesson(req, env, path.split('/')[3]);
     }
