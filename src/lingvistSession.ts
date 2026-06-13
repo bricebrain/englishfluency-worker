@@ -184,9 +184,7 @@ function buildLocalPreparedCard(word: PreparedWord): PreparedCard {
     sentenceWithGap: buildGap(sentenceFull, answer),
     sentenceFull,
     translationFr,
-    grammarHint: targetPos === 'verb'
-      ? `Cible: verbe (${inferVerbLabel(sentenceFull, answer)}). Choisis la forme naturelle selon le contexte.`
-      : 'Cible: mot lexical. Complete avec le mot le plus naturel dans le contexte.',
+    grammarHint: buildSafeGrammarHint(word, targetPos, targetPos === 'verb' ? inferVerbLabel(sentenceFull, answer) : null),
     inputPlaceholder: targetPos === 'verb' ? 'Ecris la bonne forme verbale' : 'Ecris le mot manquant',
     source: 'local',
     schemaVersion: SCHEMA_VERSION,
@@ -216,6 +214,37 @@ function inferVerbLabel(sentenceFull: string, answer: string): string {
   if (infinitiveMarkers.has(prev)) return 'base verbale';
   if (lowerAnswer.endsWith('s')) return 'present simple 3e personne';
   return 'base verbale';
+}
+
+function buildSafeGrammarHint(
+  word: PreparedWord,
+  targetPos: 'verb' | 'other',
+  verbFormLabel: string | null,
+): string {
+  const translation = cleanText(word.traduction);
+  const meaning = translation ? ` Sens: ${translation}.` : '';
+
+  if (targetPos === 'verb') {
+    const form = verbFormLabel ? ` Forme attendue: ${verbFormLabel}.` : '';
+    return `Cible: verbe.${meaning}${form} Observe le contexte avant et apres le trou.`;
+  }
+
+  return `Cible: mot lexical.${meaning} Complete avec le mot le plus naturel dans le contexte.`;
+}
+
+function sanitizeCardHint(word: PreparedWord, card: PreparedCard): PreparedCard {
+  const expectedTargetPos = isVerbLike(word.type) ? 'verb' : 'other';
+  const expectedVerbForm = expectedTargetPos === 'verb'
+    ? card.verbFormLabel ?? inferVerbLabel(card.sentenceFull, card.expectedAnswer)
+    : null;
+
+  return {
+    ...card,
+    targetPos: expectedTargetPos,
+    verbFormLabel: expectedVerbForm,
+    grammarHint: buildSafeGrammarHint(word, expectedTargetPos, expectedVerbForm),
+    inputPlaceholder: expectedTargetPos === 'verb' ? 'Ecris la bonne forme verbale' : 'Ecris le mot manquant',
+  };
 }
 
 function buildGap(sentenceFull: string, answer: string): string {
@@ -370,7 +399,8 @@ async function loadPreparedCards(
     const quality = word ? assessCardQuality(word, card) : { isValid: false, reasons: ['word_missing'] };
 
     if (quality.isValid || !options.forceRebuildInvalid) {
-      byWordId.set(row.word_id, card);
+      const safeCard = word ? sanitizeCardHint(word, card) : card;
+      byWordId.set(row.word_id, safeCard);
       reused += 1;
     } else {
       rejected.push({ wordId: row.word_id, reasons: quality.reasons });
