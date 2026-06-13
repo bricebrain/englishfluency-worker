@@ -1,6 +1,7 @@
 /**
  * Routes Lingvist (cartes + calibration)
  * GET  /lingvist/cards?profileId=
+ * GET  /lingvist/card/:wordId?profileId=
  * PUT  /lingvist/card/:wordId
  * GET  /calibration?profileId=
  * POST /calibration
@@ -28,6 +29,16 @@ export async function handleGetLingvistCards(req: Request, env: Env): Promise<Re
     'SELECT * FROM lingvist_cards WHERE profile_id = ?'
   ).bind(profileId).all<CardRow>();
   return json({ cards: results.map(deserializeCard) });
+}
+
+// GET /lingvist/card/:wordId?profileId=xxx
+export async function handleGetLingvistCard(req: Request, env: Env, wordId: string): Promise<Response> {
+  const profileId = new URL(req.url).searchParams.get('profileId') ?? 'default';
+  const row = await env.DB.prepare(
+    'SELECT * FROM lingvist_cards WHERE profile_id = ? AND word_id = ? LIMIT 1'
+  ).bind(profileId, wordId).first<CardRow>();
+
+  return json({ card: row ? deserializeCard(row) : null });
 }
 
 // PUT /lingvist/card/:wordId

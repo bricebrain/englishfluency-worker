@@ -6,7 +6,7 @@ import { handleGetSrsProgress, handleSrsReview, handleSrsPromote, handleSrsStats
 import { handleGetContent, handleCreateContent, handleDeleteContent, handlePatchContent } from './content';
 import { handleGetDictation, handleSaveDictation } from './dictation';
 import {
-  handleGetLingvistCards, handleUpsertLingvistCard,
+  handleGetLingvistCard, handleGetLingvistCards, handleUpsertLingvistCard,
   handleGetCalibration, handleSaveCalibration, handleDeleteCalibration,
 } from './lingvist';
 import { handleTtsOpenAi, handleTtsGemini, handleTtsGroq, handleServeAudio } from './tts';
@@ -111,6 +111,9 @@ export default {
 
     // ── Lingvist ─────────────────────────────────────────────────────────
     if (method === 'GET' && path === '/lingvist/cards') return handleGetLingvistCards(req, env);
+    if (method === 'GET' && path.match(/^\/lingvist\/card\/[^/]+$/)) {
+      return handleGetLingvistCard(req, env, path.split('/')[3]);
+    }
     if (method === 'PUT' && path.match(/^\/lingvist\/card\/[^/]+$/)) {
       return handleUpsertLingvistCard(req, env, path.split('/')[3]);
     }
