@@ -57,6 +57,20 @@ function normalizeRunPodOutput(data: RunPodEnvelope): RunPodWhisperOutput {
   return data.output.output;
 }
 
+function normalizeRunPodApiKey(rawKey: string): string {
+  return rawKey.trim().replace(/^Bearer\s+/i, '').trim();
+}
+
+function runPodHttpError(status: number, body: string): RunPodTranscriptionError {
+  const preview = body.slice(0, 180);
+  if (status === 401 || status === 403) {
+    return new RunPodTranscriptionError(
+      `RunPod HTTP ${status}: autorisation refusee. Verifie que RUNPOD_API_KEY est la cle API brute du meme compte RunPod, sans prefixe Bearer, et que l'endpoint appartient a ce compte. ${preview}`,
+    );
+  }
+  return new RunPodTranscriptionError(`RunPod HTTP ${status}: ${preview}`);
+}
+
 export async function transcribeWithRunPod(
   env: Env,
   input: {
@@ -72,10 +86,11 @@ export async function transcribeWithRunPod(
     throw new RunPodTranscriptionError('RUNPOD_AI_ENDPOINT_ID manquant sur englishfluency-worker');
   }
 
+  const runpodApiKey = normalizeRunPodApiKey(env.RUNPOD_API_KEY);
   const res = await fetch(`https://api.runpod.ai/v2/${env.RUNPOD_AI_ENDPOINT_ID}/runsync`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${env.RUNPOD_API_KEY}`,
+      Authorization: `Bearer ${runpodApiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -95,7 +110,7 @@ export async function transcribeWithRunPod(
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new RunPodTranscriptionError(`RunPod HTTP ${res.status}: ${text.slice(0, 180)}`);
+    throw runPodHttpError(res.status, text);
   }
   const data = await res.json<RunPodEnvelope>().catch(() => null);
   if (!data) throw new RunPodTranscriptionError('RunPod JSON invalide');
