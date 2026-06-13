@@ -1,65 +1,22 @@
 import type { Env } from './types';
-import { json } from './utils';
+import { err, isAuthorized, json } from './utils';
+import { generateAssimilArtifact } from './assimilGeneration';
+import {
+  LESSON_PREFIX,
+  TOTAL_LESSONS,
+  formatLesson,
+  parseLessonIndex,
+  parseLimit,
+  rowToLesson,
+} from './assimilModel';
+import {
+  getAssimilLessonRow,
+  hasGeneratedArtifact,
+  upsertAssimilLesson,
+  withGenerationStatus,
+} from './assimilStore';
 
-type AssimilLevel = 'A1' | 'A2' | 'B1' | 'B2';
-
-interface AssimilLesson {
-  id: string;
-  index: number;
-  code: string;
-  title: string;
-  level: AssimilLevel;
-  stageLabel: string;
-  key: string;
-  audioUrl: string;
-  available?: boolean;
-}
-
-const LESSON_PREFIX = 'audio-book-lesson';
-const TOTAL_LESSONS = 101;
-
-function levelForIndex(index: number): AssimilLevel {
-  if (index <= 20) return 'A1';
-  if (index <= 45) return 'A2';
-  if (index <= 70) return 'B1';
-  return 'B2';
-}
-
-function stageForLevel(level: AssimilLevel): string {
-  const stages: Record<AssimilLevel, string> = {
-    A1: 'Fondations',
-    A2: 'Automatismes',
-    B1: 'Autonomie',
-    B2: 'Fluidité',
-  };
-  return stages[level];
-}
-
-function formatLesson(index: number): AssimilLesson {
-  const code = `L${String(index).padStart(3, '0')}`;
-  const level = levelForIndex(index);
-  const key = `${LESSON_PREFIX}/${code}-LESSON.mp3`;
-
-  return {
-    id: `assimil_audio_${String(index).padStart(3, '0')}`,
-    index,
-    code,
-    title: `Leçon Assimil ${String(index).padStart(3, '0')}`,
-    level,
-    stageLabel: stageForLevel(level),
-    key,
-    audioUrl: `/audio/${key}`,
-  };
-}
-
-function parseLimit(raw: string | null): number {
-  if (!raw) return TOTAL_LESSONS;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) return TOTAL_LESSONS;
-  return Math.max(1, Math.min(TOTAL_LESSONS, Math.floor(parsed)));
-}
-
-async function withAvailability(env: Env, lessons: AssimilLesson[]): Promise<AssimilLesson[]> {
+async function withAvailability(env: Env, lessons: ReturnType<typeof formatLesson>[]) {
   return Promise.all(
     lessons.map(async (lesson) => ({
       ...lesson,
@@ -82,13 +39,12 @@ export async function handleAssimilLessons(req: Request, env: Env): Promise<Resp
 
   lessons = lessons.slice(0, limit);
 
-  if (checkAvailability) {
-    lessons = await withAvailability(env, lessons);
-  }
+  const availableLessons = checkAvailability ? await withAvailability(env, lessons) : lessons;
+  const enrichedLessons = await withGenerationStatus(env, availableLessons);
 
   return json({
-    items: lessons,
-    total: lessons.length,
+    items: enrichedLessons,
+    total: enrichedLessons.length,
     catalog: {
       source: 'assimil_audio',
       prefix: LESSON_PREFIX,
@@ -103,4 +59,76 @@ export async function handleAssimilLessons(req: Request, env: Env): Promise<Resp
       ],
     },
   });
+}
+
+export async function handleGetAssimilLesson(_req: Request, env: Env, rawIndex: string): Promise<Response> {
+  const index = parseLessonIndex(rawIndex);
+  if (index === null) return err('lesson index invalide', 400);
+
+  const row = await getAssimilLessonRow(env, index);
+  return json({ lesson: rowToLesson(row, index) });
+}
+
+export async function handleUpsertAssimilTranscript(req: Request, env: Env, rawIndex: string): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const index = parseLessonIndex(rawIndex);
+  if (index === null) return err('lesson index invalide', 400);
+
+  const body = await req.json<{
+    transcript?: string;
+    transcriptSource?: string;
+    titleEn?: string;
+    titleFr?: string;
+  }>().catch(() => null);
+
+  const transcript = body?.transcript?.trim();
+  if (!transcript || transcript.length < 20) return err('transcript requis', 400);
+
+  await upsertAssimilLesson(env, index, {
+    status: 'transcript_ready',
+    titleEn: body?.titleEn ?? null,
+    titleFr: body?.titleFr ?? null,
+    transcript,
+    transcriptSource: body?.transcriptSource ?? 'manual',
+  });
+
+  const row = await getAssimilLessonRow(env, index);
+  return json({ ok: true, lesson: rowToLesson(row, index) });
+}
+
+export async function handleGenerateAssimilLesson(req: Request, env: Env, rawIndex: string): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const index = parseLessonIndex(rawIndex);
+  if (index === null) return err('lesson index invalide', 400);
+
+  const body = await req.json<{ transcript?: string; force?: boolean }>().catch(() => null);
+  const existing = await getAssimilLessonRow(env, index);
+
+  if (!body?.force && hasGeneratedArtifact(existing)) {
+    return json({ ok: true, cached: true, lesson: rowToLesson(existing, index) });
+  }
+
+  const transcript = body?.transcript?.trim() || existing?.transcript?.trim();
+  if (!transcript || transcript.length < 20) {
+    return err('Transcript requis avant génération pédagogique', 428);
+  }
+
+  const base = formatLesson(index);
+  const artifact = await generateAssimilArtifact(env, index, base.level, transcript);
+  if (!artifact) return err('Génération LLM impossible', 502);
+
+  await upsertAssimilLesson(env, index, {
+    status: 'generated',
+    titleEn: artifact.titleEn,
+    titleFr: artifact.titleFr,
+    transcript,
+    transcriptSource: existing?.transcript_source ?? (body?.transcript ? 'request' : null),
+    artifact,
+    generatedBy: 'deepseek-v4-flash',
+  });
+
+  const row = await getAssimilLessonRow(env, index);
+  return json({ ok: true, cached: false, lesson: rowToLesson(row, index) });
 }

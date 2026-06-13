@@ -31,7 +31,12 @@ import {
   handleDeleteChannel,
 } from './channelLessons';
 import { handleGetDailyMission, handleGetLearningInsights, handleTrackLearningEvent } from './learning';
-import { handleAssimilLessons } from './assimil';
+import {
+  handleAssimilLessons,
+  handleGenerateAssimilLesson,
+  handleGetAssimilLesson,
+  handleUpsertAssimilTranscript,
+} from './assimil';
 
 export default {
   // ── Cron — podcast du jour (7h / 12h / 18h UTC) ─────────────────────────
@@ -79,6 +84,15 @@ export default {
       return handleServeAudio(req, env, key);
     }
     if (method === 'GET' && path === '/assimil/lessons') return handleAssimilLessons(req, env);
+    if (method === 'GET' && path.match(/^\/assimil\/lesson\/\d+$/)) {
+      return handleGetAssimilLesson(req, env, path.split('/')[3]);
+    }
+    if (method === 'PUT' && path.match(/^\/assimil\/lesson\/\d+\/transcript$/)) {
+      return handleUpsertAssimilTranscript(req, env, path.split('/')[3]);
+    }
+    if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/generate$/)) {
+      return handleGenerateAssimilLesson(req, env, path.split('/')[3]);
+    }
 
     // ── Profils ──────────────────────────────────────────────────────────
     if (method === 'GET'    && path === '/profiles')          return handleListProfiles(req, env);
