@@ -1,7 +1,7 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
 import { generateAssimilArtifact } from './assimilGeneration';
-import { transcribeWithRunPod } from './assimilRunpod';
+import { RunPodTranscriptionError, transcribeWithRunPod } from './assimilRunpod';
 import {
   LESSON_PREFIX,
   TOTAL_LESSONS,
@@ -112,14 +112,18 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
 
   const base = formatLesson(index);
   const audioUrl = new URL(`/audio/${base.key}`, req.url).toString();
-  const transcription = await transcribeWithRunPod(env, {
-    audioUrl,
-    model: body?.model,
-    initialPrompt: `English lesson ${base.code}. Short clear phrases for French learners.`,
-  });
-
-  if (!transcription) {
-    return err('Transcription RunPod impossible ou RUNPOD_API_KEY manquant', 502);
+  let transcription;
+  try {
+    transcription = await transcribeWithRunPod(env, {
+      audioUrl,
+      model: body?.model,
+      initialPrompt: `English lesson ${base.code}. Short clear phrases for French learners.`,
+    });
+  } catch (error) {
+    const message = error instanceof RunPodTranscriptionError
+      ? error.message
+      : 'Transcription RunPod impossible';
+    return err(message, 502);
   }
 
   await upsertAssimilLesson(env, index, {

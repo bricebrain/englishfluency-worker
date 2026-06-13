@@ -36,10 +36,25 @@ interface RunPodEnvelope {
   };
 }
 
-function normalizeRunPodOutput(data: RunPodEnvelope): RunPodWhisperOutput | null {
-  if (data.status && data.status !== 'COMPLETED') return null;
-  if (data.output?.ok === false) return null;
-  return data.output?.output ?? null;
+export class RunPodTranscriptionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RunPodTranscriptionError';
+  }
+}
+
+function normalizeRunPodOutput(data: RunPodEnvelope): RunPodWhisperOutput {
+  if (data.error) throw new RunPodTranscriptionError(`RunPod: ${data.error}`);
+  if (data.status && data.status !== 'COMPLETED') {
+    throw new RunPodTranscriptionError(`RunPod status ${data.status}`);
+  }
+  if (data.output?.ok === false) {
+    throw new RunPodTranscriptionError(data.output.error ?? 'RunPod worker returned ok=false');
+  }
+  if (!data.output?.output) {
+    throw new RunPodTranscriptionError('RunPod response has no transcription output');
+  }
+  return data.output.output;
 }
 
 export async function transcribeWithRunPod(
@@ -49,8 +64,13 @@ export async function transcribeWithRunPod(
     model?: string;
     initialPrompt?: string;
   },
-): Promise<WhisperTranscription | null> {
-  if (!env.RUNPOD_API_KEY || !env.RUNPOD_AI_ENDPOINT_ID) return null;
+): Promise<WhisperTranscription> {
+  if (!env.RUNPOD_API_KEY) {
+    throw new RunPodTranscriptionError('RUNPOD_API_KEY manquant sur englishfluency-worker');
+  }
+  if (!env.RUNPOD_AI_ENDPOINT_ID) {
+    throw new RunPodTranscriptionError('RUNPOD_AI_ENDPOINT_ID manquant sur englishfluency-worker');
+  }
 
   const res = await fetch(`https://api.runpod.ai/v2/${env.RUNPOD_AI_ENDPOINT_ID}/runsync`, {
     method: 'POST',
@@ -69,15 +89,20 @@ export async function transcribeWithRunPod(
           'English audio lesson for French learners. Clear short educational sentences.',
       },
     }),
-  }).catch(() => null);
+  }).catch((error) => {
+    throw new RunPodTranscriptionError(error instanceof Error ? error.message : 'RunPod fetch failed');
+  });
 
-  if (!res?.ok) return null;
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new RunPodTranscriptionError(`RunPod HTTP ${res.status}: ${text.slice(0, 180)}`);
+  }
   const data = await res.json<RunPodEnvelope>().catch(() => null);
-  if (!data) return null;
+  if (!data) throw new RunPodTranscriptionError('RunPod JSON invalide');
 
   const output = normalizeRunPodOutput(data);
   const text = output?.text?.trim();
-  if (!output || !text) return null;
+  if (!text) throw new RunPodTranscriptionError('Transcription vide');
 
   return {
     text,
