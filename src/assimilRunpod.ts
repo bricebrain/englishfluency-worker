@@ -27,6 +27,7 @@ interface RunPodWhisperOutput {
 }
 
 interface RunPodEnvelope {
+  id?: string;
   status?: string;
   error?: string;
   output?: {
@@ -41,6 +42,10 @@ export class RunPodTranscriptionError extends Error {
     super(message);
     this.name = 'RunPodTranscriptionError';
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeRunPodOutput(data: RunPodEnvelope): RunPodWhisperOutput {
@@ -81,10 +86,62 @@ function runPodHttpError(
   return new RunPodTranscriptionError(`RunPod HTTP ${status}: ${preview}`);
 }
 
+async function fetchRunPodStatus(
+  endpointId: string,
+  apiKey: string,
+  jobId: string,
+): Promise<RunPodEnvelope> {
+  const res = await fetch(`https://api.runpod.ai/v2/${endpointId}/status/${jobId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(30_000),
+  }).catch((error) => {
+    throw new RunPodTranscriptionError(error instanceof Error ? error.message : 'RunPod status fetch failed');
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw runPodHttpError(res.status, text, {
+      endpointId,
+      apiKeyLength: apiKey.length,
+    });
+  }
+
+  const data = await res.json<RunPodEnvelope>().catch(() => null);
+  if (!data) throw new RunPodTranscriptionError('RunPod status JSON invalide');
+  return data;
+}
+
+async function waitForRunPodCompletion(
+  initialData: RunPodEnvelope,
+  endpointId: string,
+  apiKey: string,
+): Promise<RunPodEnvelope> {
+  let data = initialData;
+  const queuedStatuses = new Set(['IN_QUEUE', 'IN_PROGRESS']);
+  const terminalErrorStatuses = new Set(['FAILED', 'CANCELLED', 'TIMED_OUT']);
+
+  for (let attempt = 0; attempt < 36; attempt += 1) {
+    if (!data.status || data.status === 'COMPLETED') return data;
+    if (terminalErrorStatuses.has(data.status)) {
+      throw new RunPodTranscriptionError(`RunPod status ${data.status}: ${data.error ?? 'job failed'}`);
+    }
+    if (!queuedStatuses.has(data.status)) return data;
+    if (!data.id) throw new RunPodTranscriptionError(`RunPod status ${data.status} sans job id`);
+
+    await sleep(attempt < 6 ? 5_000 : 10_000);
+    data = await fetchRunPodStatus(endpointId, apiKey, data.id);
+  }
+
+  throw new RunPodTranscriptionError(`RunPod transcription timeout: ${data.status ?? 'unknown'}`);
+}
+
 export async function transcribeWithRunPod(
   env: Env,
   input: {
-    audioUrl: string;
+    audioUrl?: string;
+    audioBase64?: string;
+    device?: string;
+    computeType?: string;
     model?: string;
     initialPrompt?: string;
   },
@@ -94,6 +151,9 @@ export async function transcribeWithRunPod(
   }
   if (!env.RUNPOD_AI_ENDPOINT_ID) {
     throw new RunPodTranscriptionError('RUNPOD_AI_ENDPOINT_ID manquant sur englishfluency-worker');
+  }
+  if (!input.audioUrl && !input.audioBase64) {
+    throw new RunPodTranscriptionError('audioUrl ou audioBase64 requis pour RunPod');
   }
 
   const runpodApiKey = normalizeRunPodApiKey(env.RUNPOD_API_KEY);
@@ -108,7 +168,10 @@ export async function transcribeWithRunPod(
       input: {
         task: 'transcribe.whisper',
         audio_url: input.audioUrl,
+        audio_base64: input.audioBase64,
         language: 'en',
+        device: input.device,
+        compute_type: input.computeType,
         model: input.model,
         initial_prompt:
           input.initialPrompt ??
@@ -127,7 +190,9 @@ export async function transcribeWithRunPod(
       apiKeyLength: runpodApiKey.length,
     });
   }
-  const data = await res.json<RunPodEnvelope>().catch(() => null);
+  const initialData = await res.json<RunPodEnvelope>().catch(() => null);
+  if (!initialData) throw new RunPodTranscriptionError('RunPod JSON invalide');
+  const data = await waitForRunPodCompletion(initialData, endpointId, runpodApiKey);
   if (!data) throw new RunPodTranscriptionError('RunPod JSON invalide');
 
   const output = normalizeRunPodOutput(data);

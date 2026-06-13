@@ -1,9 +1,11 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
-import { generateAssimilArtifact } from './assimilGeneration';
+import { AssimilGenerationError, generateAssimilArtifact } from './assimilGeneration';
+import { OpenAITranscriptionError, transcribeWithOpenAI } from './assimilOpenAI';
 import { RunPodTranscriptionError, normalizeRunPodApiKey, transcribeWithRunPod } from './assimilRunpod';
 import {
   LESSON_PREFIX,
+  type AssimilLevel,
   TOTAL_LESSONS,
   formatLesson,
   parseLessonIndex,
@@ -17,6 +19,10 @@ import {
   withGenerationStatus,
 } from './assimilStore';
 
+type ArtifactResult =
+  | { ok: true; artifact: Awaited<ReturnType<typeof generateAssimilArtifact>> }
+  | { ok: false; response: Response };
+
 async function withAvailability(env: Env, lessons: ReturnType<typeof formatLesson>[]) {
   return Promise.all(
     lessons.map(async (lesson) => ({
@@ -24,6 +30,36 @@ async function withAvailability(env: Env, lessons: ReturnType<typeof formatLesso
       available: Boolean(await env.AUDIO.head(lesson.key)),
     })),
   );
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
+}
+
+async function generateArtifactResponse(
+  env: Env,
+  index: number,
+  level: AssimilLevel,
+  transcript: string,
+): Promise<ArtifactResult> {
+  try {
+    const artifact = await generateAssimilArtifact(env, index, level, transcript);
+    return { ok: true, artifact };
+  } catch (error) {
+    const message = error instanceof AssimilGenerationError
+      ? error.message
+      : 'Génération LLM impossible';
+    return { ok: false, response: err(message, 502) };
+  }
 }
 
 export async function handleAssimilLessons(req: Request, env: Env): Promise<Response> {
@@ -121,43 +157,84 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
   const index = parseLessonIndex(rawIndex);
   if (index === null) return err('lesson index invalide', 400);
 
-  const body = await req.json<{ model?: string; force?: boolean; generate?: boolean }>().catch(() => null);
+  const body = await req.json<{
+    provider?: 'openai' | 'runpod';
+    model?: string;
+    force?: boolean;
+    generate?: boolean;
+  }>().catch(() => null);
   const existing = await getAssimilLessonRow(env, index);
   if (!body?.force && existing?.transcript?.trim()) {
+    if (body?.generate && !hasGeneratedArtifact(existing)) {
+      const base = formatLesson(index);
+      const artifactResult = await generateArtifactResponse(env, index, base.level, existing.transcript.trim());
+      if (!artifactResult.ok) return artifactResult.response;
+      const { artifact } = artifactResult;
+
+      await upsertAssimilLesson(env, index, {
+        status: 'generated',
+        titleEn: artifact.titleEn,
+        titleFr: artifact.titleFr,
+        transcript: existing.transcript,
+        transcriptSource: existing.transcript_source,
+        artifact,
+        generatedBy: 'deepseek-v4-flash',
+      });
+
+      const row = await getAssimilLessonRow(env, index);
+      return json({ ok: true, cached: false, lesson: rowToLesson(row, index) });
+    }
+
     return json({ ok: true, cached: true, lesson: rowToLesson(existing, index) });
   }
 
   const base = formatLesson(index);
-  const audioUrl = new URL(`/audio/${base.key}`, req.url).toString();
+  const audioObject = await env.AUDIO.get(base.key);
+  if (!audioObject) return err(`Audio Assimil introuvable: ${base.key}`, 404);
+
+  const audioBuffer = await audioObject.arrayBuffer();
+  const provider = body?.provider ?? 'openai';
   let transcription;
   try {
-    transcription = await transcribeWithRunPod(env, {
-      audioUrl,
-      model: body?.model,
-      initialPrompt: `English lesson ${base.code}. Short clear phrases for French learners.`,
-    });
+    const initialPrompt = `English lesson ${base.code}. Short clear phrases for French learners.`;
+    if (provider === 'runpod') {
+      transcription = await transcribeWithRunPod(env, {
+        audioBase64: arrayBufferToBase64(audioBuffer),
+        model: body?.model,
+        initialPrompt,
+      });
+    } else {
+      transcription = await transcribeWithOpenAI(env, {
+        audio: audioBuffer,
+        filename: `${base.code}-LESSON.mp3`,
+        model: body?.model,
+        prompt: initialPrompt,
+      });
+    }
   } catch (error) {
-    const message = error instanceof RunPodTranscriptionError
+    const message = error instanceof RunPodTranscriptionError || error instanceof OpenAITranscriptionError
       ? error.message
-      : 'Transcription RunPod impossible';
+      : 'Transcription impossible';
     return err(message, 502);
   }
 
   await upsertAssimilLesson(env, index, {
     status: 'transcript_ready',
     transcript: transcription.text,
-    transcriptSource: `runpod:${transcription.model}`,
+    transcriptSource: `${provider}:${transcription.model}`,
   });
 
   if (body?.generate) {
-    const artifact = await generateAssimilArtifact(env, index, base.level, transcription.text);
+    const artifactResult = await generateArtifactResponse(env, index, base.level, transcription.text);
+    if (!artifactResult.ok) return artifactResult.response;
+    const { artifact } = artifactResult;
     if (artifact) {
       await upsertAssimilLesson(env, index, {
         status: 'generated',
         titleEn: artifact.titleEn,
         titleFr: artifact.titleFr,
         transcript: transcription.text,
-        transcriptSource: `runpod:${transcription.model}`,
+        transcriptSource: `${provider}:${transcription.model}`,
         artifact,
         generatedBy: 'deepseek-v4-flash',
       });
@@ -199,8 +276,9 @@ export async function handleGenerateAssimilLesson(req: Request, env: Env, rawInd
   }
 
   const base = formatLesson(index);
-  const artifact = await generateAssimilArtifact(env, index, base.level, transcript);
-  if (!artifact) return err('Génération LLM impossible', 502);
+  const artifactResult = await generateArtifactResponse(env, index, base.level, transcript);
+  if (!artifactResult.ok) return artifactResult.response;
+  const { artifact } = artifactResult;
 
   await upsertAssimilLesson(env, index, {
     status: 'generated',

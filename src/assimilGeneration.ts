@@ -1,6 +1,13 @@
 import type { Env } from './types';
 import type { AssimilLessonArtifact, AssimilLevel } from './assimilModel';
 
+export class AssimilGenerationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AssimilGenerationError';
+  }
+}
+
 function extractJsonObject(raw: string): Record<string, unknown> | null {
   try {
     const first = raw.indexOf('{');
@@ -88,9 +95,9 @@ export async function generateAssimilArtifact(
   index: number,
   level: AssimilLevel,
   transcript: string,
-): Promise<AssimilLessonArtifact | null> {
+): Promise<AssimilLessonArtifact> {
   const apiKey = await env.DEEPSEEK_API_KEY.get().catch(() => null);
-  if (!apiKey) return null;
+  if (!apiKey) throw new AssimilGenerationError('DEEPSEEK_API_KEY manquant');
 
   const res = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
@@ -110,12 +117,22 @@ export async function generateAssimilArtifact(
       temperature: 0.25,
       max_tokens: 3200,
     }),
-  }).catch(() => null);
+  }).catch((error) => {
+    throw new AssimilGenerationError(error instanceof Error ? error.message : 'DeepSeek fetch failed');
+  });
 
-  if (!res?.ok) return null;
+  if (!res.ok) {
+    const preview = await res.text().catch(() => '');
+    throw new AssimilGenerationError(`DeepSeek HTTP ${res.status}: ${preview.slice(0, 240)}`);
+  }
   const data = await res.json<{ choices?: Array<{ message?: { content?: string } }> }>().catch(() => null);
   const raw = data?.choices?.[0]?.message?.content;
-  if (!raw) return null;
+  if (!raw) throw new AssimilGenerationError('DeepSeek response without message content');
 
-  return extractJsonObject(raw) as AssimilLessonArtifact | null;
+  const parsed = extractJsonObject(raw) as AssimilLessonArtifact | null;
+  if (!parsed) {
+    throw new AssimilGenerationError(`DeepSeek JSON parse failed: ${raw.slice(0, 240)}`);
+  }
+
+  return parsed;
 }
