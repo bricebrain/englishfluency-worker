@@ -10,6 +10,8 @@ export interface Env {
   TECHPULSE: Fetcher;
   // Per-worker secret classique
   API_SECRET?: string;
+  RUNPOD_API_KEY?: string;
+  RUNPOD_AI_ENDPOINT_ID?: string;
   // YouTube API keys (wrangler secret put)
   YT_READ_KEY_1?: string;
   YT_READ_KEY_2?: string;

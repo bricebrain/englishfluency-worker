@@ -15,7 +15,9 @@
     }
   ],
 
-  "vars": {},
+  "vars": {
+    "RUNPOD_AI_ENDPOINT_ID": "ql54gjc8r659yr"
+  },
 
   // ── Cron — génération du podcast du jour (7h, 12h, 18h UTC)
 

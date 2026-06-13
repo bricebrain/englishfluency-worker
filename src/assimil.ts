@@ -1,6 +1,7 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
 import { generateAssimilArtifact } from './assimilGeneration';
+import { transcribeWithRunPod } from './assimilRunpod';
 import {
   LESSON_PREFIX,
   TOTAL_LESSONS,
@@ -95,6 +96,67 @@ export async function handleUpsertAssimilTranscript(req: Request, env: Env, rawI
 
   const row = await getAssimilLessonRow(env, index);
   return json({ ok: true, lesson: rowToLesson(row, index) });
+}
+
+export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawIndex: string): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const index = parseLessonIndex(rawIndex);
+  if (index === null) return err('lesson index invalide', 400);
+
+  const body = await req.json<{ model?: string; force?: boolean; generate?: boolean }>().catch(() => null);
+  const existing = await getAssimilLessonRow(env, index);
+  if (!body?.force && existing?.transcript?.trim()) {
+    return json({ ok: true, cached: true, lesson: rowToLesson(existing, index) });
+  }
+
+  const base = formatLesson(index);
+  const audioUrl = new URL(`/audio/${base.key}`, req.url).toString();
+  const transcription = await transcribeWithRunPod(env, {
+    audioUrl,
+    model: body?.model,
+    initialPrompt: `English lesson ${base.code}. Short clear phrases for French learners.`,
+  });
+
+  if (!transcription) {
+    return err('Transcription RunPod impossible ou RUNPOD_API_KEY manquant', 502);
+  }
+
+  await upsertAssimilLesson(env, index, {
+    status: 'transcript_ready',
+    transcript: transcription.text,
+    transcriptSource: `runpod:${transcription.model}`,
+  });
+
+  if (body?.generate) {
+    const artifact = await generateAssimilArtifact(env, index, base.level, transcription.text);
+    if (artifact) {
+      await upsertAssimilLesson(env, index, {
+        status: 'generated',
+        titleEn: artifact.titleEn,
+        titleFr: artifact.titleFr,
+        transcript: transcription.text,
+        transcriptSource: `runpod:${transcription.model}`,
+        artifact,
+        generatedBy: 'deepseek-v4-flash',
+      });
+    }
+  }
+
+  const row = await getAssimilLessonRow(env, index);
+  return json({
+    ok: true,
+    cached: false,
+    transcription: {
+      model: transcription.model,
+      language: transcription.language,
+      languageProbability: transcription.languageProbability,
+      duration: transcription.duration,
+      segmentCount: transcription.segments.length,
+      durationMs: transcription.durationMs,
+    },
+    lesson: rowToLesson(row, index),
+  });
 }
 
 export async function handleGenerateAssimilLesson(req: Request, env: Env, rawIndex: string): Promise<Response> {

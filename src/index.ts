@@ -35,6 +35,7 @@ import {
   handleAssimilLessons,
   handleGenerateAssimilLesson,
   handleGetAssimilLesson,
+  handleTranscribeAssimilLesson,
   handleUpsertAssimilTranscript,
 } from './assimil';
 
@@ -89,6 +90,9 @@ export default {
     }
     if (method === 'PUT' && path.match(/^\/assimil\/lesson\/\d+\/transcript$/)) {
       return handleUpsertAssimilTranscript(req, env, path.split('/')[3]);
+    }
+    if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/transcribe$/)) {
+      return handleTranscribeAssimilLesson(req, env, path.split('/')[3]);
     }
     if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/generate$/)) {
       return handleGenerateAssimilLesson(req, env, path.split('/')[3]);
