@@ -35,6 +35,21 @@ export const SIGNAL_META: Record<string, { label: string; lessonId: string | nul
     lessonId: 'L10',
     recommendation: 'Renforce les combinaisons naturelles de mots pour sonner plus juste.',
   },
+  answer_format: {
+    label: 'Format de réponse',
+    lessonId: null,
+    recommendation: 'Travaille le rappel du seul mot manquant, sans reecrire toute la phrase.',
+  },
+  empty_answer: {
+    label: 'Rappel actif',
+    lessonId: null,
+    recommendation: 'Prends quelques secondes pour tenter une réponse avant de révéler la carte.',
+  },
+  lexical_choice: {
+    label: 'Choix lexical',
+    lessonId: 'L10',
+    recommendation: 'Renforce les mots proches et leurs contextes pour choisir le terme le plus naturel.',
+  },
   plurality: {
     label: 'Singulier / pluriel',
     lessonId: 'L02',
@@ -55,6 +70,11 @@ export const SIGNAL_META: Record<string, { label: string; lessonId: string | nul
     lessonId: 'L03',
     recommendation: 'Une lecon de temps verbaux t aidera a produire plus proprement et plus naturellement.',
   },
+  verb_form: {
+    label: 'Formes verbales',
+    lessonId: 'L03',
+    recommendation: 'Revois les formes attendues des verbes dans des phrases courtes et contextualisées.',
+  },
   word_order: {
     label: 'Ordre des mots',
     lessonId: 'L08',
@@ -69,7 +89,11 @@ export const SIGNAL_RULES: { id: string; pattern: RegExp }[] = [
   { id: 'word_order', pattern: /word order|syntax|sentence order|wrong order|position in the sentence/i },
   { id: 'plurality', pattern: /plural|singular|countable|uncountable|plural form/i },
   { id: 'collocations', pattern: /collocation|phrasal verb|natural phrase|idiom|more natural/i },
+  { id: 'answer_format', pattern: /answer_format|format de r[eé]ponse|whole sentence|full sentence|phrase enti[eè]re|seul mot/i },
+  { id: 'empty_answer', pattern: /empty_answer|r[eé]ponse absente|aucune r[eé]ponse|sans r[eé]ponse/i },
+  { id: 'lexical_choice', pattern: /lexical_choice|wrong word|choix lexical|mot attendu|trop [eé]loign/i },
   { id: 'spelling', pattern: /spelling|orthograph|typo|misspell/i },
+  { id: 'verb_form', pattern: /verb_form|forme verbale|forme attendue|wrong verb form|base verbale|participe|preterit|conjug/i },
   { id: 'agreement', pattern: /agreement|subject verb|verb agreement/i },
 ];
 

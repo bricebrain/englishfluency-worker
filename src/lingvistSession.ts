@@ -50,6 +50,11 @@ interface PreparedWord extends Omit<SessionWordRow, 'examples' | 'review_history
   review_history: unknown[];
 }
 
+interface LearningEventSignalRow {
+  payload: string;
+  score: number | null;
+}
+
 interface CardRow {
   word_id: string;
   example_en: string;
@@ -104,6 +109,48 @@ function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function extractRecentSignals(payload: Record<string, unknown>): string[] {
+  const signals = Array.isArray(payload.linguisticSignals)
+    ? payload.linguisticSignals.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  const errorCategory = typeof payload.errorCategory === 'string' ? payload.errorCategory : '';
+  const correctionMode = typeof payload.correctionMode === 'string' ? payload.correctionMode : '';
+
+  return [...new Set([
+    ...signals,
+    errorCategory === 'none' ? '' : errorCategory,
+    correctionMode === 'exact' ? '' : correctionMode,
+  ].filter(Boolean))];
+}
+
+async function loadRecentWeaknessSignals(env: Env, profileId: string): Promise<string[]> {
+  const result = await env.DB.prepare(`
+    SELECT payload, score
+    FROM learning_events
+    WHERE profile_id = ?
+      AND event_type = 'review_word'
+      AND module IN ('lingvist', 'review')
+      AND occurred_at >= datetime('now', '-14 days')
+    ORDER BY occurred_at DESC
+    LIMIT 60
+  `).bind(profileId).all<LearningEventSignalRow>();
+
+  const counts = new Map<string, number>();
+
+  for (const row of result.results) {
+    if ((row.score ?? 1) > 0.72) continue;
+    const payload = parseJson<Record<string, unknown>>(row.payload, {});
+    for (const signal of extractRecentSignals(payload)) {
+      counts.set(signal, (counts.get(signal) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([signal]) => signal);
 }
 
 function hydrateExistingWord(row: SessionWordRow): PreparedWord {
@@ -203,6 +250,60 @@ function buildLocalPreparedCard(word: PreparedWord): PreparedCard {
 function isVerbLike(type: string | null): boolean {
   const lower = (type ?? '').toLowerCase();
   return /(^|[^a-z])v\.?($|[^a-z])/.test(lower) || /\bverb\b/.test(lower) || /\bmodal\b/.test(lower);
+}
+
+function isNounLike(type: string | null): boolean {
+  const lower = (type ?? '').toLowerCase();
+  return /\bnoun\b|\bn\.?\b/.test(lower);
+}
+
+function isPrepositionLike(type: string | null): boolean {
+  return /\bprep\b|\bpreposition\b/i.test(type ?? '');
+}
+
+function wordMatchesWeakness(word: PreparedWord, signals: string[]): boolean {
+  if (!signals.length) return false;
+
+  if (isVerbLike(word.type) && signals.some((signal) => ['agreement', 'tense', 'verb_form'].includes(signal))) {
+    return true;
+  }
+
+  if (isNounLike(word.type) && signals.some((signal) => ['articles', 'plurality'].includes(signal))) {
+    return true;
+  }
+
+  if (isPrepositionLike(word.type) && signals.includes('prepositions')) {
+    return true;
+  }
+
+  if (signals.some((signal) => ['collocations', 'lexical_choice', 'slow_recall'].includes(signal))) {
+    return true;
+  }
+
+  return false;
+}
+
+function rankWordForWeakness(word: PreparedWord, signals: string[]): number {
+  let score = 0;
+  if (wordMatchesWeakness(word, signals)) score += 20;
+  score += (word.fail_count ?? 0) * 5;
+  score += (word.almost_count ?? 0) * 2;
+  score -= (word.success_count ?? 0) * 0.25;
+  if (word.status === 'learning') score += 2;
+  if (word.repetitions === 0) score += 1;
+  return score;
+}
+
+function orderWordsForWeakness<T extends PreparedWord>(words: T[], signals: string[], limit: number): T[] {
+  if (!signals.length) return words.slice(0, limit);
+
+  return [...words]
+    .sort((a, b) => {
+      const scoreDiff = rankWordForWeakness(b, signals) - rankWordForWeakness(a, signals);
+      if (scoreDiff !== 0) return scoreDiff;
+      return String(a.prochaine_revision).localeCompare(String(b.prochaine_revision));
+    })
+    .slice(0, limit);
 }
 
 function pickAnswer(lemma: string, sentenceFull: string): string {
@@ -445,6 +546,8 @@ function upsertCardStatement(env: Env, profileId: string, card: PreparedCard): D
 }
 
 async function loadSessionWords(env: Env, profileId: string, limit: number): Promise<PreparedWord[]> {
+  const weaknessSignals = await loadRecentWeaknessSignals(env, profileId);
+  const candidateLimit = weaknessSignals.length ? Math.min(limit * 3, 160) : limit;
   const dueResult = await env.DB.prepare(`
     SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD},
       wp.prochaine_revision, wp.intervalle, wp.facilite, wp.repetitions,
@@ -455,12 +558,13 @@ async function loadSessionWords(env: Env, profileId: string, limit: number): Pro
     WHERE wp.repetitions > 0 AND wp.prochaine_revision <= datetime('now')
     ORDER BY wp.prochaine_revision ASC
     LIMIT ?
-  `).bind(profileId, limit).all<SessionWordRow>();
+  `).bind(profileId, candidateLimit).all<SessionWordRow>();
 
-  const dueWords = dueResult.results.map(hydrateExistingWord);
+  const dueWords = orderWordsForWeakness(dueResult.results.map(hydrateExistingWord), weaknessSignals, limit);
   const newLimit = Math.max(0, limit - dueWords.length);
   if (newLimit <= 0) return dueWords;
 
+  const newCandidateLimit = weaknessSignals.length ? Math.min(newLimit * 3, 160) : newLimit;
   const newResult = await env.DB.prepare(`
     SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD}
     FROM words w
@@ -468,10 +572,11 @@ async function loadSessionWords(env: Env, profileId: string, limit: number): Pro
     WHERE wp.id IS NULL
     ORDER BY w.frequence DESC, w.niveau ASC
     LIMIT ?
-  `).bind(profileId, newLimit).all<WordRow>();
+  `).bind(profileId, newCandidateLimit).all<WordRow>();
 
   const now = new Date().toISOString();
-  return [...dueWords, ...newResult.results.map((word) => hydrateNewWord(word, now))];
+  const newWords = orderWordsForWeakness(newResult.results.map((word) => hydrateNewWord(word, now)), weaknessSignals, newLimit);
+  return [...dueWords, ...newWords];
 }
 
 async function loadPreparedCards(

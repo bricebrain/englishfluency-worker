@@ -1197,6 +1197,7 @@ export async function handleGetDailyMission(req: Request, env: Env): Promise<Res
     reviewAvgScore7d,
     speakAvgScore7d,
   });
+  const topWeakness = weaknesses[0] ?? null;
   const courseWeakness = weaknesses.find((item) => item.lessonId) ?? null;
 
   let focusSkill: LearningSkill = 'vocabulary';
@@ -1260,6 +1261,19 @@ export async function handleGetDailyMission(req: Request, env: Env): Promise<Res
       route: MODULE_ROUTE_MAP.listen,
       subtitle: 'Ecoute, revele le transcript au besoin, puis valide le quiz final.',
       title: 'Faire une session ecoute',
+    };
+  }
+
+  if (topWeakness?.source === 'lingvist' && dueCount > 0) {
+    focusSkill = 'vocabulary';
+    summary = `Le signal le plus exploitable vient de Lingvist : ${topWeakness.label.toLowerCase()}. La prochaine session doit consolider ce point precis.`;
+    primaryAction = {
+      badge: topWeakness.label,
+      id: 'lingvist_targeted',
+      minutes: 8,
+      route: MODULE_ROUTE_MAP.lingvist,
+      subtitle: topWeakness.recommendation,
+      title: 'Faire une session Lingvist ciblee',
     };
   }
 
