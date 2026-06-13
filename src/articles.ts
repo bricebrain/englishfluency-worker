@@ -1,5 +1,5 @@
 /**
- * POST /articles/lesson   — leçon complète calibrée CEFR (vocab + grammaire + texte + question)
+ * POST /articles/lesson   — leçon complète calibrée CEFR depuis une source anglaise
  * POST /articles/feedback — évalue la réponse libre de l'apprenant (contenu + grammaire + modèle)
  *
  * Pipeline : Gemini 3.5 Flash → fallback DeepSeek V4 Flash.
@@ -13,7 +13,7 @@ import { json, err, isAuthorized } from './utils';
 export interface VocabItem {
   term: string;           // expression anglaise
   definition_fr: string;  // définition courte en français (≤ 8 mots)
-  example: string;        // exemple anglais dans un contexte tech
+  example: string;        // exemple anglais dans un contexte réel
 }
 
 export interface GrammarPoint {
@@ -34,6 +34,7 @@ export interface ArticleLesson {
 interface LessonRequest {
   hash?: string;
   title: string;
+  summary?: string | null;
   summary_fr?: string | null;
   theme?: string | null;
   level?: string | null;  // CEFR : A1 | A2 | B1 | B2 | C1
@@ -45,7 +46,7 @@ const LEVEL_STYLE: Record<string, string> = {
   A1: 'Use only present simple and "to be". Max 6 words per sentence. Only the most common 500 English words. No subordinate clauses.',
   A2: 'Use present simple, past simple, going-to future. Max 10 words per sentence. Common everyday vocabulary. Simple connectors (and, but, because, so).',
   B1: 'Use full past tenses, present perfect, will/going-to future, simple conditionals. 12-15 words per sentence. Relative clauses allowed.',
-  B2: 'Use full tense range including passive. 15-20 words per sentence. Complex relative clauses, reported speech. Standard tech vocabulary.',
+  B2: 'Use full tense range including passive. 15-20 words per sentence. Complex relative clauses, reported speech. Standard current-affairs vocabulary.',
   C1: 'Use complex structures: mixed conditionals, cleft sentences, nominalisations. 20-25 words per sentence. Idiomatic collocations.',
 };
 
@@ -55,7 +56,7 @@ function buildSystemPrompt(level: string): string {
   const style = LEVEL_STYLE[level] ?? LEVEL_STYLE['B1'];
   return `You are an English teacher for French speakers. The learner's CEFR level is: ${level}.
 
-Your task: generate a complete reading lesson from a tech article headline.
+Your task: generate a complete reading lesson from an English source title and summary.
 
 Respond ONLY with a JSON object — no markdown, no extra text — with exactly this structure:
 {
@@ -78,7 +79,7 @@ Rules for each field:
 vocabulary (3 entries, calibrated to ${level}):
 - "term": an English word or expression from the title or context, appropriate for ${level} level
 - "definition_fr": French definition, max 8 words, clear and simple
-- "example": 1 short English sentence using the term in a tech context (NOT the article title itself)
+- "example": 1 short English sentence using the term in a natural current-affairs or conversation context
 
 grammar (1 entry):
 - "pattern": name of the grammar structure found in the article title (passive, present perfect, gerund, modal, compound noun, etc.)
@@ -86,24 +87,25 @@ grammar (1 entry):
 - "tip_fr": 1 pedagogical sentence in French, max 15 words
 
 reading (single string, 150-200 words):
-- Write an English text about the article's topic at EXACTLY ${level} level
+- Write an English text about the source topic at EXACTLY ${level} level
 - Writing style for ${level}: ${style}
 - The text MUST naturally use the 3 vocabulary terms you defined above
-- Cover the key information from the article (what happened, who, what impact)
+- Cover the key information from the source (what happened, who, what impact)
 - Do NOT invent facts — base everything on the title and summary provided
 - The text should feel like a short news brief, not a lesson
 - Do NOT start with "In this article" or "Today we learn"
 
 question (single string):
-- ONE comprehension question in English about the reading text you just wrote (not the original article)
+- ONE comprehension question in English about the reading text you just wrote (not the original source title)
 - Start with What / How / Why / Which / Who
 - Appropriate for ${level} level difficulty`;
 }
 
 function buildUserPrompt(req: LessonRequest): string {
-  let prompt = `Article title (English): "${req.title}"`;
-  if (req.summary_fr?.trim()) {
-    prompt += `\n\nFrench summary: "${req.summary_fr.trim()}"`;
+  let prompt = `Source title (English): "${req.title}"`;
+  const summary = req.summary?.trim() || req.summary_fr?.trim();
+  if (summary) {
+    prompt += `\n\nSource summary: "${summary}"`;
   }
   if (req.theme) {
     prompt += `\n\nTheme: ${req.theme}`;

@@ -1,5 +1,5 @@
 /**
- * podcast.ts — Podcast pédagogique quotidien basé sur les articles TechPulse.
+ * podcast.ts — Podcast pédagogique quotidien basé sur des sources anglaises d'apprentissage.
  *
  * GET  /podcasts/daily          — retourne le podcast du jour (D1 cache)
  * POST /podcasts/generate       — force la (re)génération (admin / cron manuel)
@@ -11,6 +11,7 @@
  */
 
 import type { Env } from './types';
+import { fetchReadingSourceArticles, type ReadingSourceArticle } from './readingSources';
 import { json, err } from './utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -41,33 +42,6 @@ export interface DailyPodcast {
   segments: PodcastSegment[];
   quiz: QuizQuestion[];
   generatedAt: number;
-}
-
-interface TechPulseArticle {
-  hash: string;
-  title: string;
-  title_fr: string | null;
-  source_name: string;
-  url: string | null;
-  summary_fr: string | null;
-  theme: string;
-  published_at: number | null;
-}
-
-// ─── Language detection ───────────────────────────────────────────────────────
-// Détecte si un titre est en anglais (pas en français).
-
-const FR_ACCENT_RE = /[éèêëàâçîïôûùœæÉÈÊËÀÂÇÎÏÔÛÙŒÆ]/g;
-const FR_WORD_RE   = /\b(le|la|les|un|une|des|du|au|aux|est|sont|avec|pour|sur|dans|par|qui|que|où|ce|se|en|et|ou|mais|donc|car|ni|de|à)\b/gi;
-
-function looksEnglish(title: string): boolean {
-  if (!title || title.length < 5) return false;
-  const accentCount = (title.match(FR_ACCENT_RE) ?? []).length;
-  if (accentCount >= 3) return false; // 3+ accents typiquement français
-  const words = title.split(/\s+/).filter((w) => w.length > 1);
-  if (words.length < 3) return true;  // trop court pour juger
-  const frCount = (title.match(FR_WORD_RE) ?? []).length;
-  return frCount / words.length <= 0.25; // >25% mots FR → probablement français
 }
 
 // ─── AI generation ────────────────────────────────────────────────────────────
@@ -105,7 +79,7 @@ const SYSTEM_PROMPT = `You are a podcast scriptwriter for an English learning ap
 Your podcasts are based on real tech news articles.
 ALWAYS return ONLY valid JSON, no markdown fences, no extra text.`;
 
-function buildPrompt(article: TechPulseArticle, level: string): string {
+function buildPrompt(article: ReadingSourceArticle, level: string): string {
   const levelGuide: Record<string, string> = {
     A2: 'Simple sentences (max 12 words). Basic vocabulary. Present/past simple only.',
     B1: 'Clear sentences (max 15 words). Standard vocabulary. Full tense range.',
@@ -114,10 +88,10 @@ function buildPrompt(article: TechPulseArticle, level: string): string {
   };
   const guide = levelGuide[level] ?? levelGuide['B1'];
 
-  return `Create an English learning podcast episode based on this real tech news article.
+  return `Create an English learning podcast episode based on this English learning source.
 
-Article title (English): "${article.title}"
-Article summary (French): "${article.summary_fr ?? 'No summary available'}"
+Source title (English): "${article.title}"
+Source summary (English): "${article.summary_fr ?? 'No summary available'}"
 Source: ${article.source_name}
 
 Level: ${level} — ${guide}
@@ -142,7 +116,7 @@ Return ONLY this JSON structure:
 
 Requirements:
 - 7–9 segments total, alternating host/learner
-- Host introduces topic, explains key vocabulary, discusses implications
+- Host introduces topic, explains key vocabulary, and helps the learner understand the source
 - Learner asks natural questions, reflects, shows comprehension
 - Each segment: 1–2 natural spoken sentences
 - "fr" field: precise, natural French translation of each segment
@@ -152,13 +126,13 @@ Requirements:
 - Exactly 3 choices per question, exactly 1 correct answer
 - explanationFr: ≤15 words in French
 - Language level ${level}: respect grammar complexity guide above
-- Base content ONLY on the real article facts — do not invent`;
+- Base content ONLY on the source information — do not invent extra facts`;
 }
 
 // ─── Core generation ──────────────────────────────────────────────────────────
 
 async function generatePodcast(
-  article: TechPulseArticle,
+  article: ReadingSourceArticle,
   level: string,
   env: Env,
 ): Promise<Omit<DailyPodcast, 'id' | 'level' | 'articleHash' | 'articleTitle' | 'articleTitleFr' | 'articleSource' | 'articleUrl' | 'generatedAt'> | null> {
@@ -217,22 +191,6 @@ function tryParse(raw: string): { podcastTitle: string; keyVocab: string[]; segm
   }
 }
 
-// ─── TechPulse fetch + filter ─────────────────────────────────────────────────
-
-async function fetchEnglishArticles(env: Env, limit = 10): Promise<TechPulseArticle[]> {
-  try {
-    const res = await env.TECHPULSE.fetch(
-      new Request(`http://techpulse/articles/recent?hours=12&limit=${limit}`),
-    );
-    if (!res.ok) return [];
-    const data = await res.json<{ articles?: TechPulseArticle[] }>().catch(() => ({ articles: [] }));
-    const articles = data?.articles ?? (Array.isArray(data) ? (data as TechPulseArticle[]) : []);
-    return articles.filter((a) => looksEnglish(a.title));
-  } catch {
-    return [];
-  }
-}
-
 // ─── D1 store / retrieve ──────────────────────────────────────────────────────
 
 const GLOBAL_PROFILE = '__global__';
@@ -277,7 +235,7 @@ async function getLatestPodcast(env: Env, _level: string): Promise<DailyPodcast 
 // ─── Pub: generate + store ────────────────────────────────────────────────────
 
 export async function generateAndStoreDailyPodcast(env: Env, level = 'B1'): Promise<DailyPodcast | null> {
-  const articles = await fetchEnglishArticles(env, 10);
+    const articles = await fetchReadingSourceArticles(10);
   if (articles.length === 0) return null;
 
   // Prendre l'article le plus récent avec un titre substantiel (> 30 chars)

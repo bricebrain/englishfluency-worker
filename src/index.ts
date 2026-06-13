@@ -16,8 +16,11 @@ import {
   handlePatchAudio, handleRandom, handleGrammarSeed,
 } from './vocabulary';
 import { handleArticleLesson, handleAnswerFeedback, handlePromoteWords } from './articles';
+import { handleGetReadingSources } from './readingSources';
 import { handleQrGenerate, handleQrAnalyze } from './qr';
 import { handleSpeakAnalyze } from './speak';
+import { handlePromoteSpeakFeedback } from './speakRecycle';
+import { handlePromotePodcastWords } from './podcastRecycle';
 import { handleGetDailyPodcast, handleGeneratePodcast, generateAndStoreDailyPodcast } from './podcast';
 import {
   handleGetChannelLesson,
@@ -26,6 +29,7 @@ import {
   handleToggleChannel,
   handleDeleteChannel,
 } from './channelLessons';
+import { handleGetDailyMission, handleGetLearningInsights, handleTrackLearningEvent } from './learning';
 
 export default {
   // ── Cron — podcast du jour (7h / 12h / 18h UTC) ─────────────────────────
@@ -86,6 +90,11 @@ export default {
     if (method === 'GET'  && path === '/srs/stats')     return handleSrsStats(req, env);
     if (method === 'POST' && path === '/srs/review')    return handleSrsReview(req, env);
     if (method === 'POST' && path === '/srs/calibrate') return handleSrsCalibrate(req, env);
+
+    // ── Mémoire pédagogique ──────────────────────────────────────────────
+    if (method === 'GET'  && path === '/learning/mission') return handleGetDailyMission(req, env);
+    if (method === 'GET'  && path === '/learning/insights') return handleGetLearningInsights(req, env);
+    if (method === 'POST' && path === '/learning/events')  return handleTrackLearningEvent(req, env);
     // Legacy (admin/debug)
     if (method === 'GET'  && path === '/srs/progress')  return handleGetSrsProgress(req, env);
     if (method === 'POST' && path === '/srs/promote')   return handleSrsPromote(req, env);
@@ -119,6 +128,7 @@ export default {
     // ── Podcasts du jour (cron + on-demand) ─────────────────────────────────
     if (method === 'GET'  && path === '/podcasts/daily')    return handleGetDailyPodcast(req, env);
     if (method === 'POST' && path === '/podcasts/generate') return handleGeneratePodcast(req, env);
+    if (method === 'POST' && path === '/podcasts/promote-words') return handlePromotePodcastWords(req, env);
 
     // ── Leçons YouTube (BBC Learning English / engVid) ───────────────────────
     if (method === 'GET'    && path === '/lessons/channel')              return handleGetChannelLesson(req, env);
@@ -135,14 +145,8 @@ export default {
 
     // ── Parler — transcription + analyse vocale ───────────────────────────
     if (method === 'POST' && path === '/speak/analyze') return handleSpeakAnalyze(req, env);
-    if (method === 'GET' && path === '/articles') {
-      const hours = url.searchParams.get('hours') ?? '24';
-      const limit = Math.min(Number(url.searchParams.get('limit') ?? '15'), 30);
-      // Appel zéro-latence via Service Binding (pas de HTTP externe)
-      return env.TECHPULSE.fetch(
-        new Request(`http://techpulse/articles/recent?hours=${hours}&limit=${limit}`),
-      );
-    }
+    if (method === 'POST' && path === '/speak/promote-feedback') return handlePromoteSpeakFeedback(req, env);
+    if (method === 'GET' && path === '/articles') return handleGetReadingSources(req);
 
     // ── Vocabulary (existant) ─────────────────────────────────────────────
     if (method === 'GET' && path === '/words/count')        return handleGetCount(env);

@@ -8,6 +8,7 @@
  * DELETE /admin/channels/:id              — supprime une chaîne
  *
  * Les chaînes sont stockées dans la table D1 `youtube_channels`.
+ * `id` peut être un channel_id YouTube (UCxxx) ou un alias `user:NomDeCompte`.
  * Pas de clé YouTube requise — utilise les flux RSS publics.
  */
 
@@ -50,6 +51,21 @@ interface ChannelRow {
   created_at: string;
 }
 
+const DEFAULT_CHANNELS = [
+  { id: 'UCHaHD477h-FeBbVh9Sh7syA', name: 'BBC Learning English' },
+  { id: 'UCKyTokYo0nK2OA-az-sDijA', name: 'VOA Learning English' },
+  { id: 'UCxJGMJbjokfnr2-s4_RXPxQ', name: 'Speak English With Vanessa' },
+  { id: 'UCicjynhfFw2LiIQFnoS1JTw', name: "Let's Talk" },
+  { id: 'UCKRBA9XfgzAtJodE4t8cUeg', name: 'engVid' },
+  { id: 'user:Ispeakspokespoken', name: 'iSpeakSpokeSpoken' },
+] as const;
+
+function buildYoutubeFeedUrl(channelRef: string): string {
+  return channelRef.startsWith('user:')
+    ? `https://www.youtube.com/feeds/videos.xml?user=${encodeURIComponent(channelRef.slice(5))}`
+    : `https://www.youtube.com/feeds/videos.xml?channel_id=${channelRef}`;
+}
+
 // ─── D1 channel management ────────────────────────────────────────────────────
 
 async function getActiveChannels(env: Env): Promise<{ id: string; name: string }[]> {
@@ -60,10 +76,7 @@ async function getActiveChannels(env: Env): Promise<{ id: string; name: string }
     return results ?? [];
   } catch {
     // Fallback si la table n'existe pas encore (migration pas encore appliquée)
-    return [
-      { id: 'UCHaHD477h-FeBbVh9Sh7syA', name: 'BBC Learning English' },
-      { id: 'UCKRBA9XfgzAtJodE4t8cUeg', name: 'engVid' },
-    ];
+    return [...DEFAULT_CHANNELS];
   }
 }
 
@@ -86,10 +99,9 @@ export async function handleAddChannel(req: Request, env: Env): Promise<Response
   const name      = body.name.trim();
 
   // Vérifie que le flux RSS existe
-  const test = await fetch(
-    `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`,
-    { headers: { 'User-Agent': 'Mozilla/5.0' } },
-  );
+  const test = await fetch(buildYoutubeFeedUrl(channelId), {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+  });
   if (!test.ok) return err(`Channel introuvable (RSS ${test.status}). Vérifie l'ID.`, 422);
 
   await env.DB.prepare(
@@ -144,7 +156,7 @@ function extractTag(block: string, tag: string): string {
 async function fetchChannelVideos(channelId: string, channelName: string): Promise<YtVideo[]> {
   try {
     const res = await fetch(
-      `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`,
+      buildYoutubeFeedUrl(channelId),
       { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EnglishFluency/1.0)' } },
     );
     if (!res.ok) return [];

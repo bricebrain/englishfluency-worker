@@ -45,6 +45,7 @@ export async function handleDeleteProfile(req: Request, env: Env, profileId: str
   await env.DB.batch([
     env.DB.prepare('DELETE FROM word_progress WHERE profile_id = ?').bind(profileId),
     env.DB.prepare('DELETE FROM review_history_daily WHERE profile_id = ?').bind(profileId),
+    env.DB.prepare('DELETE FROM learning_events WHERE profile_id = ?').bind(profileId),
     env.DB.prepare('DELETE FROM content WHERE profile_id = ?').bind(profileId),
     env.DB.prepare('DELETE FROM dictation_sessions WHERE profile_id = ?').bind(profileId),
     env.DB.prepare('DELETE FROM lingvist_cards WHERE profile_id = ?').bind(profileId),
