@@ -1,5 +1,5 @@
 export type AssimilLevel = 'A1' | 'A2' | 'B1' | 'B2';
-export type AssimilLessonStatus = 'audio_ready' | 'transcript_ready' | 'generated';
+export type AssimilLessonStatus = 'audio_ready' | 'transcribing' | 'transcript_ready' | 'generated';
 
 export interface AssimilLesson {
   id: string;
@@ -27,6 +27,9 @@ export interface AssimilLessonRow {
   title_fr: string | null;
   transcript: string | null;
   transcript_source: string | null;
+  transcription_job_id: string | null;
+  transcription_status: string | null;
+  audio_json: string;
   lesson_json: string;
   generated_by: string | null;
   generation_version: number;
@@ -139,6 +142,9 @@ export function rowToLesson(row: AssimilLessonRow | null, index: number) {
       titleFr: null,
       transcript: null,
       transcriptSource: null,
+      transcriptionJobId: null,
+      transcriptionStatus: null,
+      audioAnalysis: null,
       artifact: null,
       generatedBy: null,
       updatedAt: null,
@@ -152,6 +158,9 @@ export function rowToLesson(row: AssimilLessonRow | null, index: number) {
     titleFr: row.title_fr,
     transcript: row.transcript,
     transcriptSource: row.transcript_source,
+    transcriptionJobId: row.transcription_job_id,
+    transcriptionStatus: row.transcription_status,
+    audioAnalysis: safeJsonParse<Record<string, unknown> | null>(row.audio_json, null),
     artifact: safeJsonParse<AssimilLessonArtifact | null>(row.lesson_json, null),
     generatedBy: row.generated_by,
     updatedAt: row.updated_at,

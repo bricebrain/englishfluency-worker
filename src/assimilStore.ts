@@ -27,17 +27,21 @@ export async function upsertAssimilLesson(
     titleFr?: string | null;
     transcript?: string | null;
     transcriptSource?: string | null;
+    transcriptionJobId?: string | null;
+    transcriptionStatus?: string | null;
+    audioAnalysis?: Record<string, unknown> | null;
     artifact?: AssimilLessonArtifact | null;
     generatedBy?: string | null;
   },
 ): Promise<void> {
   const base = formatLesson(index);
   await env.DB.prepare(
-    `INSERT INTO assimil_lessons (
+     `INSERT INTO assimil_lessons (
        lesson_index, audio_key, level, status, title_en, title_fr,
-       transcript, transcript_source, lesson_json, generated_by, updated_at
+       transcript, transcript_source, transcription_job_id, transcription_status,
+       audio_json, lesson_json, generated_by, updated_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, '{}'), COALESCE(?, '{}'), ?, datetime('now'))
      ON CONFLICT(lesson_index) DO UPDATE SET
        audio_key=excluded.audio_key,
        level=excluded.level,
@@ -46,7 +50,10 @@ export async function upsertAssimilLesson(
        title_fr=COALESCE(excluded.title_fr, assimil_lessons.title_fr),
        transcript=COALESCE(excluded.transcript, assimil_lessons.transcript),
        transcript_source=COALESCE(excluded.transcript_source, assimil_lessons.transcript_source),
-       lesson_json=excluded.lesson_json,
+       transcription_job_id=COALESCE(excluded.transcription_job_id, assimil_lessons.transcription_job_id),
+       transcription_status=COALESCE(excluded.transcription_status, assimil_lessons.transcription_status),
+       audio_json=COALESCE(excluded.audio_json, assimil_lessons.audio_json),
+       lesson_json=COALESCE(excluded.lesson_json, assimil_lessons.lesson_json),
        generated_by=COALESCE(excluded.generated_by, assimil_lessons.generated_by),
        updated_at=datetime('now')`,
   ).bind(
@@ -58,7 +65,10 @@ export async function upsertAssimilLesson(
     values.titleFr ?? null,
     values.transcript ?? null,
     values.transcriptSource ?? null,
-    JSON.stringify(values.artifact ?? {}),
+    values.transcriptionJobId ?? null,
+    values.transcriptionStatus ?? null,
+    values.audioAnalysis === undefined ? null : JSON.stringify(values.audioAnalysis ?? {}),
+    values.artifact === undefined ? null : JSON.stringify(values.artifact ?? {}),
     values.generatedBy ?? null,
   ).run();
 }

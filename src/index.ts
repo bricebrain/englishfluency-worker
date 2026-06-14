@@ -34,6 +34,7 @@ import { handleGetDailyMission, handleGetLearningInsights, handleTrackLearningEv
 import {
   handleAssimilRunPodStatus,
   handleAssimilLessons,
+  handleAssimilTranscriptionStatus,
   handleGenerateAssimilLesson,
   handleGetAssimilLesson,
   handleTranscribeAssimilLesson,
@@ -95,6 +96,9 @@ export default {
     }
     if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/transcribe$/)) {
       return handleTranscribeAssimilLesson(req, env, path.split('/')[3]);
+    }
+    if (method === 'GET' && path.match(/^\/assimil\/lesson\/\d+\/transcription-status$/)) {
+      return handleAssimilTranscriptionStatus(req, env, path.split('/')[3]);
     }
     if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/generate$/)) {
       return handleGenerateAssimilLesson(req, env, path.split('/')[3]);

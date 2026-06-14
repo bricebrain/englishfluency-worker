@@ -2,7 +2,13 @@ import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
 import { AssimilGenerationError, generateAssimilArtifact } from './assimilGeneration';
 import { OpenAITranscriptionError, transcribeWithOpenAI } from './assimilOpenAI';
-import { RunPodTranscriptionError, normalizeRunPodApiKey, transcribeWithRunPod } from './assimilRunpod';
+import {
+  RunPodTranscriptionError,
+  getRunPodTranscriptionStatus,
+  normalizeRunPodApiKey,
+  submitRunPodTranscriptionJob,
+  transcribeWithRunPod,
+} from './assimilRunpod';
 import { cleanAssimilTranscript } from './assimilTranscript';
 import {
   LESSON_PREFIX,
@@ -164,6 +170,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
     model?: string;
     force?: boolean;
     generate?: boolean;
+    async?: boolean;
   }>().catch(() => null);
   const existing = await getAssimilLessonRow(env, index);
   if (!body?.force && existing?.transcript?.trim()) {
@@ -200,6 +207,28 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
   try {
     const initialPrompt = `English lesson ${base.code}. Short clear phrases for French learners.`;
     if (provider === 'runpod') {
+      if (body?.async) {
+        const job = await submitRunPodTranscriptionJob(env, {
+          audioBase64: arrayBufferToBase64(audioBuffer),
+          model: body?.model,
+          initialPrompt,
+        });
+
+        await upsertAssimilLesson(env, index, {
+          status: 'transcribing',
+          transcriptionJobId: job.id,
+          transcriptionStatus: job.status,
+        });
+
+        const row = await getAssimilLessonRow(env, index);
+        return json({
+          ok: true,
+          queued: true,
+          job,
+          lesson: rowToLesson(row, index),
+        }, 202);
+      }
+
       transcription = await transcribeWithRunPod(env, {
         audioBase64: arrayBufferToBase64(audioBuffer),
         model: body?.model,
@@ -250,13 +279,83 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
     cached: false,
     transcription: {
       model: transcription.model,
+      provider: transcription.provider ?? provider,
+      device: transcription.device,
+      computeType: transcription.computeType,
       language: transcription.language,
       languageProbability: transcription.languageProbability,
       duration: transcription.duration,
       segmentCount: transcription.segments.length,
       durationMs: transcription.durationMs,
+      wordTimestamps: transcription.wordTimestamps,
+      audioFeatures: transcription.audioFeatures,
+      diarization: transcription.diarization,
+      previewSegments: provider === 'runpod' ? transcription.segments.slice(0, 8) : undefined,
     },
     lesson: rowToLesson(row, index),
+  });
+}
+
+export async function handleAssimilTranscriptionStatus(req: Request, env: Env, rawIndex: string): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const index = parseLessonIndex(rawIndex);
+  if (index === null) return err('lesson index invalide', 400);
+
+  const row = await getAssimilLessonRow(env, index);
+  const jobId = row?.transcription_job_id?.trim();
+  if (!jobId) return err('Aucun job de transcription pour cette leçon', 404);
+
+  let status;
+  try {
+    status = await getRunPodTranscriptionStatus(env, jobId, row?.transcript_source ?? undefined);
+  } catch (error) {
+    const message = error instanceof RunPodTranscriptionError
+      ? error.message
+      : 'Statut RunPod impossible';
+    return err(message, 502);
+  }
+
+  if (status.status === 'COMPLETED' && status.transcription) {
+    const transcription = status.transcription;
+    const cleanedTranscript = cleanAssimilTranscript(transcription.text);
+    await upsertAssimilLesson(env, index, {
+      status: 'transcript_ready',
+      transcript: cleanedTranscript,
+      transcriptSource: `runpod:${transcription.model}`,
+      transcriptionStatus: status.status,
+      audioAnalysis: {
+        provider: transcription.provider ?? 'runpod',
+        model: transcription.model,
+        language: transcription.language,
+        languageProbability: transcription.languageProbability,
+        duration: transcription.duration,
+        durationMs: transcription.durationMs,
+        device: transcription.device,
+        computeType: transcription.computeType,
+        wordTimestamps: transcription.wordTimestamps,
+        audioFeatures: transcription.audioFeatures,
+        diarization: transcription.diarization,
+        segments: transcription.segments,
+      },
+    });
+  } else {
+    await upsertAssimilLesson(env, index, {
+      status: 'transcribing',
+      transcriptionStatus: status.status,
+    });
+  }
+
+  const updated = await getAssimilLessonRow(env, index);
+  return json({
+    ok: true,
+    job: {
+      id: status.id ?? jobId,
+      status: status.status,
+      error: status.error,
+    },
+    completed: status.status === 'COMPLETED',
+    lesson: rowToLesson(updated, index),
   });
 }
 
