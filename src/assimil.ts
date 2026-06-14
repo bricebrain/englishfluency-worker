@@ -1,7 +1,16 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
-import { AssimilGenerationError, generateAssimilArtifact } from './assimilGeneration';
-import { GeminiAudioError, transcribeWithGeminiAudio } from './assimilGemini';
+import {
+  AssimilGenerationError,
+  generateAssimilArtifact,
+  translateLinesToFrench,
+} from './assimilGeneration';
+import {
+  GeminiAudioError,
+  analyzeAssimilDialogueAudio,
+  transcribeWithGeminiAudio,
+} from './assimilGemini';
+import { DeepgramTranscriptionError, transcribeWithDeepgram } from './assimilDeepgram';
 import { OpenAITranscriptionError, transcribeWithOpenAI } from './assimilOpenAI';
 import {
   RunPodTranscriptionError,
@@ -11,7 +20,14 @@ import {
   submitRunPodTranscriptionJob,
   transcribeWithRunPod,
 } from './assimilRunpod';
-import { cleanAssimilTranscript, preserveAssimilTranscript } from './assimilTranscript';
+import {
+  applyDialogueAnalysis,
+  buildAssimilDialogue,
+  cleanAssimilTranscript,
+  formatAssimilDialogue,
+  preserveAssimilTranscript,
+  type DialogueLine,
+} from './assimilTranscript';
 import {
   LESSON_PREFIX,
   type AssimilLevel,
@@ -182,7 +198,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
   if (index === null) return err('lesson index invalide', 400);
 
   const body = await req.json<{
-    provider?: 'auto' | 'gemini' | 'openai' | 'runpod';
+    provider?: 'auto' | 'deepgram' | 'gemini' | 'openai' | 'runpod';
     model?: string;
     force?: boolean;
     generate?: boolean;
@@ -219,7 +235,8 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
 
   const audioBuffer = await audioObject.arrayBuffer();
   const provider = body?.provider ?? 'auto';
-  let resolvedProvider: 'gemini' | 'openai' | 'runpod' = provider === 'auto' ? 'gemini' : provider;
+  let resolvedProvider: 'deepgram' | 'gemini' | 'openai' | 'runpod' =
+    provider === 'auto' ? 'deepgram' : provider;
   let transcription;
   let audioAnalysis: Record<string, unknown> | undefined;
   try {
@@ -252,41 +269,76 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
         model: body?.model,
         initialPrompt,
       });
-    } else if (provider === 'gemini' || provider === 'auto') {
+    } else if (provider === 'deepgram' || provider === 'auto') {
+      // Piste principale : ASR dédié, fidèle + diarisation native dans le même appel.
       try {
-        const result = await transcribeWithGeminiAudio(env, {
+        resolvedProvider = 'deepgram';
+        transcription = await transcribeWithDeepgram(env, {
           audio: audioBuffer,
-          filename: `${base.code}-LESSON.mp3`,
-          mimeType: 'audio/mpeg',
-          lessonCode: base.code,
           model: body?.model,
+          minSpeakers: 2,
+          maxSpeakers: 2,
         });
-        transcription = result.transcription;
-        audioAnalysis = {
-          provider: 'gemini',
-          model: transcription.model,
-          titleEn: result.analysis.titleEn,
-          titleFr: result.analysis.titleFr,
-          summaryFr: result.analysis.summaryFr,
-          transcriptFr: result.analysis.transcriptFr,
-          speakers: result.analysis.speakers ?? [],
-          segments: result.analysis.segments ?? [],
-          pedagogicalNotes: result.analysis.pedagogicalNotes ?? [],
-        };
       } catch (error) {
-        if (provider === 'gemini') throw error;
-        resolvedProvider = 'openai';
-        transcription = await transcribeWithOpenAI(env, {
-          audio: audioBuffer,
-          filename: `${base.code}-LESSON.mp3`,
-          model: undefined,
-          prompt: initialPrompt,
-        });
-        audioAnalysis = {
-          provider: 'openai_fallback',
-          reason: error instanceof GeminiAudioError ? error.message : 'Gemini audio unavailable',
-        };
+        if (provider === 'deepgram') throw error;
+        // auto : repli Gemini (diarisation prompt) puis OpenAI (texte fidèle sans locuteurs).
+        try {
+          resolvedProvider = 'gemini';
+          const result = await transcribeWithGeminiAudio(env, {
+            audio: audioBuffer,
+            filename: `${base.code}-LESSON.mp3`,
+            mimeType: 'audio/mpeg',
+            lessonCode: base.code,
+            model: body?.model,
+          });
+          transcription = result.transcription;
+          audioAnalysis = {
+            provider: 'gemini',
+            model: transcription.model,
+            titleEn: result.analysis.titleEn,
+            titleFr: result.analysis.titleFr,
+            summaryFr: result.analysis.summaryFr,
+            transcriptFr: result.analysis.transcriptFr,
+            speakers: result.analysis.speakers ?? [],
+            segments: result.analysis.segments ?? [],
+            pedagogicalNotes: result.analysis.pedagogicalNotes ?? [],
+          };
+        } catch (geminiError) {
+          resolvedProvider = 'openai';
+          transcription = await transcribeWithOpenAI(env, {
+            audio: audioBuffer,
+            filename: `${base.code}-LESSON.mp3`,
+            model: undefined,
+            prompt: initialPrompt,
+          });
+          audioAnalysis = {
+            provider: 'openai_fallback',
+            reason: [error, geminiError]
+              .map((e) => (e instanceof Error ? e.message : 'unknown'))
+              .join(' | '),
+          };
+        }
       }
+    } else if (provider === 'gemini') {
+      const result = await transcribeWithGeminiAudio(env, {
+        audio: audioBuffer,
+        filename: `${base.code}-LESSON.mp3`,
+        mimeType: 'audio/mpeg',
+        lessonCode: base.code,
+        model: body?.model,
+      });
+      transcription = result.transcription;
+      audioAnalysis = {
+        provider: 'gemini',
+        model: transcription.model,
+        titleEn: result.analysis.titleEn,
+        titleFr: result.analysis.titleFr,
+        summaryFr: result.analysis.summaryFr,
+        transcriptFr: result.analysis.transcriptFr,
+        speakers: result.analysis.speakers ?? [],
+        segments: result.analysis.segments ?? [],
+        pedagogicalNotes: result.analysis.pedagogicalNotes ?? [],
+      };
     } else {
       resolvedProvider = 'openai';
       transcription = await transcribeWithOpenAI(env, {
@@ -298,6 +350,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
     }
   } catch (error) {
     const message = error instanceof RunPodTranscriptionError
+      || error instanceof DeepgramTranscriptionError
       || error instanceof OpenAITranscriptionError
       || error instanceof GeminiAudioError
       ? error.message
@@ -305,16 +358,76 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
     return err(message, 502);
   }
 
+  // Diarisation disponible → reconstruction de la SEULE 1ʳᵉ lecture (locuteur par
+  // locuteur, question/affirmation), puis annotation audio : genre (hauteur de voix)
+  // et émotion/ton par réplique. L'annotation ne retranscrit rien → aucun mot perdu.
+  let dialogue: DialogueLine[] = [];
+  const diarizedSpeakers = Array.from(
+    new Set(
+      transcription.segments
+        .map((segment) => segment.speaker)
+        .filter((speaker): speaker is string => Boolean(speaker)),
+    ),
+  );
+  if (diarizedSpeakers.length) {
+    dialogue = buildAssimilDialogue(
+      transcription.segments.map((segment) => ({
+        start: segment.start,
+        end: segment.end,
+        text: segment.text,
+        speaker: segment.speaker,
+      })),
+    );
+
+    const analysis = await analyzeAssimilDialogueAudio(env, {
+      audio: audioBuffer,
+      lines: dialogue.map((line) => ({ speakerLabel: line.speakerLabel, text: line.text })),
+    }).catch(() => ({ genders: {}, annotations: [] }));
+
+    dialogue = applyDialogueAnalysis(dialogue, {
+      genderBySpeaker: analysis.genders,
+      annotations: analysis.annotations,
+    });
+
+    // Traduction FR phrase par phrase (DeepSeek), stockée par réplique pour le bouton "Afficher FR".
+    const translations = await translateLinesToFrench(
+      env,
+      dialogue.map((line) => line.text),
+    ).catch(() => dialogue.map(() => ''));
+    dialogue = dialogue.map((line, i) => ({ ...line, textFr: translations[i] ?? '' }));
+
+    audioAnalysis = {
+      ...(audioAnalysis ?? {}),
+      provider: resolvedProvider,
+      model: transcription.model,
+      diarization: transcription.diarization,
+      speakerGenders: analysis.genders,
+      dialogue,
+    };
+  }
+
+  // Transcript visible = 1ʳᵉ lecture étiquetée par locuteur si diarisation dispo,
+  // sinon repli sur la transcription complète préservée.
+  const firstReadingTranscript = dialogue.length
+    ? formatAssimilDialogue(dialogue)
+    : preserveAssimilTranscript(transcription.text);
+  // Entrée de génération = texte brut de la 1ʳᵉ lecture (sans préfixe locuteur).
+  const generationInput = dialogue.length
+    ? dialogue.map((line) => line.text).join('\n')
+    : cleanAssimilTranscript(transcription.text);
+
   await upsertAssimilLesson(env, index, {
     status: 'transcript_ready',
-    transcript: preserveAssimilTranscript(transcription.text),
+    transcript: firstReadingTranscript,
     transcriptSource: `${resolvedProvider}:${transcription.model}`,
+    transcriptionJobId: null,
+    transcriptionStatus: null,
     audioAnalysis,
   });
 
   if (body?.generate) {
-    const cleanedTranscript = cleanAssimilTranscript(transcription.text);
-    const preservedTranscript = preserveAssimilTranscript(transcription.text);
+    const cleanedTranscript = generationInput;
+    const preservedTranscript = firstReadingTranscript;
     const artifactResult = await generateArtifactResponse(env, index, base.level, cleanedTranscript);
     if (!artifactResult.ok) return artifactResult.response;
     const { artifact } = artifactResult;
@@ -325,6 +438,8 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
         titleFr: artifact.titleFr,
         transcript: preservedTranscript,
         transcriptSource: `${resolvedProvider}:${transcription.model}`,
+        transcriptionJobId: null,
+        transcriptionStatus: null,
         audioAnalysis,
         artifact,
         generatedBy: 'deepseek-v4-flash',
@@ -349,8 +464,10 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
       wordTimestamps: transcription.wordTimestamps,
       audioFeatures: transcription.audioFeatures,
       diarization: transcription.diarization,
+      speakerCount: diarizedSpeakers.length,
       previewSegments: provider === 'runpod' ? transcription.segments.slice(0, 8) : undefined,
     },
+    dialogue,
     lesson: rowToLesson(row, index),
   });
 }

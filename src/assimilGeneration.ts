@@ -90,6 +90,61 @@ Rules:
 - Avoid padding; quality over quantity.`;
 }
 
+/**
+ * Traduit en français, phrase par phrase, les répliques du dialogue (1ʳᵉ lecture).
+ * Un seul appel DeepSeek, alignement strict par index. En cas d'échec, renvoie
+ * des chaînes vides (la VF reste simplement masquée côté app).
+ */
+export async function translateLinesToFrench(
+  env: Env,
+  lines: string[],
+): Promise<string[]> {
+  const empty = lines.map(() => '');
+  if (!lines.length) return empty;
+
+  const apiKey = await env.DEEPSEEK_API_KEY.get().catch(() => null);
+  if (!apiKey) return empty;
+
+  const numbered = lines.map((line, index) => `${index}. ${line}`).join('\n');
+  const prompt = [
+    'Traduis en français naturel chaque réplique anglaise ci-dessous (sens, pas mot-à-mot).',
+    'Conserve exactement le même nombre d\'entrées et le même ordre.',
+    'Réponds uniquement par ce JSON: { "translations": [{ "i": 0, "fr": "..." }] }',
+    '',
+    numbered,
+  ].join('\n');
+
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'deepseek-v4-flash',
+      messages: [
+        { role: 'system', content: 'You translate English learner sentences into natural French. Respond only with valid JSON.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.2,
+      max_tokens: 2000,
+      response_format: { type: 'json_object' },
+    }),
+  }).catch(() => null);
+
+  if (!res || !res.ok) return empty;
+
+  const data = await res.json<{ choices?: Array<{ message?: { content?: string } }> }>().catch(() => null);
+  const raw = data?.choices?.[0]?.message?.content;
+  if (!raw) return empty;
+
+  const parsed = extractJsonObject(raw) as { translations?: Array<{ i?: number; fr?: string }> } | null;
+  const out = [...empty];
+  for (const entry of parsed?.translations ?? []) {
+    if (typeof entry.i === 'number' && entry.i >= 0 && entry.i < out.length && typeof entry.fr === 'string') {
+      out[entry.i] = entry.fr.trim();
+    }
+  }
+  return out;
+}
+
 export async function generateAssimilArtifact(
   env: Env,
   index: number,

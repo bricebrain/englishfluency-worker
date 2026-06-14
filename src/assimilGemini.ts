@@ -1,5 +1,6 @@
 import type { Env } from './types';
 import type { WhisperTranscription } from './assimilRunpod';
+import type { DialogueAnnotation, DialogueEmotion, DialogueGender } from './assimilTranscript';
 
 export class GeminiAudioError extends Error {
   constructor(message: string) {
@@ -164,6 +165,138 @@ function normalizeGeminiResult(
         : 'No speaker distinction returned by Gemini',
     },
   };
+}
+
+export type SpeakerGender = DialogueGender;
+
+const EMOTION_VALUES: DialogueEmotion[] = [
+  'happy', 'sad', 'angry', 'surprised', 'anxious', 'calm', 'neutral', 'other',
+];
+
+function coerceGender(value: string | undefined): DialogueGender {
+  const v = value?.toLowerCase();
+  return v === 'female' || v === 'male' ? v : 'unknown';
+}
+
+function coerceEmotion(value: string | undefined): DialogueEmotion {
+  const v = value?.toLowerCase() as DialogueEmotion | undefined;
+  return v && EMOTION_VALUES.includes(v) ? v : 'neutral';
+}
+
+interface GeminiDialogueAnalysis {
+  genders?: Record<string, string>;
+  lines?: Array<{ i?: number; emotion?: string; tone?: string }>;
+}
+
+/**
+ * Analyse audio du dialogue, FIABLE car découplée de la transcription : on passe les
+ * répliques DÉJÀ transcrites (texte + locuteur) et le modèle ne fait qu'ANNOTER —
+ * il n'écrit aucun mot, donc il ne peut pas en perdre.
+ * Retourne, par locuteur, le genre (hauteur de voix) ; et, par réplique, l'émotion
+ * perçue (joyeux/triste/agacé…) + une description courte du ton en français.
+ */
+export async function analyzeAssimilDialogueAudio(
+  env: Env,
+  input: {
+    audio: ArrayBuffer;
+    lines: Array<{ speakerLabel: string; text: string }>;
+    mimeType?: string;
+    model?: string;
+  },
+): Promise<{
+  genders: Record<string, DialogueGender>;
+  annotations: DialogueAnnotation[];
+}> {
+  const speakerLabels = Array.from(new Set(input.lines.map((line) => line.speakerLabel)));
+  const fallbackGenders: Record<string, DialogueGender> = {};
+  for (const label of speakerLabels) fallbackGenders[label] = 'unknown';
+  const fallbackAnnotations: DialogueAnnotation[] = input.lines.map(() => ({
+    emotion: 'neutral',
+    tone: '',
+  }));
+  const fallback = { genders: fallbackGenders, annotations: fallbackAnnotations };
+
+  if (!input.lines.length) return fallback;
+
+  const apiKey = await env.GEMINI_API_KEY.get().catch(() => null);
+  if (!apiKey) return fallback;
+
+  const model = input.model ?? 'gemini-3.5-flash';
+  const mimeType = input.mimeType ?? 'audio/mpeg';
+  if (input.audio.byteLength > 19_000_000) return fallback;
+
+  const lineListing = input.lines
+    .map((line, index) => `${index}. [${line.speakerLabel}] ${line.text}`)
+    .join('\n');
+
+  const prompt = [
+    'Tu écoutes un dialogue audio en anglais. Les répliques sont DÉJÀ transcrites ci-dessous.',
+    'Tu ne dois RIEN retranscrire ni modifier le texte : tu écoutes seulement pour ANNOTER.',
+    '',
+    'Tâche 1 — genre par locuteur, UNIQUEMENT d\'après la hauteur/le timbre de la voix.',
+    'Ne te base pas sur le contenu ni sur le rôle joué (une femme peut lire un rôle masculin).',
+    'Voix grave = male, voix aiguë = female, sinon unknown.',
+    '',
+    'Tâche 2 — pour CHAQUE réplique (par son index), l\'émotion perçue à l\'oral et le ton.',
+    'emotion ∈ {happy, sad, angry, surprised, anxious, calm, neutral, other}.',
+    'tone = description courte en français (ex. "enjoué et poli", "déçu", "pressé").',
+    '',
+    'Répliques (index, locuteur, texte) :',
+    lineListing,
+    '',
+    'Réponds uniquement par ce JSON :',
+    '{',
+    `  "genders": { ${speakerLabels.map((l) => `"${l}": "female|male|unknown"`).join(', ')} },`,
+    '  "lines": [ { "i": 0, "emotion": "happy|sad|angry|surprised|anxious|calm|neutral|other", "tone": "ton en français" } ]',
+    '}',
+  ].join('\n');
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType, data: toBase64(input.audio) } },
+            { text: prompt },
+          ],
+        }],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+      }),
+      signal: AbortSignal.timeout(90_000),
+    },
+  ).catch(() => null);
+
+  if (!res || !res.ok) return fallback;
+
+  const data = await res.json<{
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  }>().catch(() => null);
+  const rawText = data ? extractGeminiText(data) : null;
+  if (!rawText) return fallback;
+
+  const parsed = safeParseJson<GeminiDialogueAnalysis>(rawText);
+  if (!parsed) return fallback;
+
+  const genders: Record<string, DialogueGender> = {};
+  for (const label of speakerLabels) genders[label] = coerceGender(parsed.genders?.[label]);
+
+  const annotations: DialogueAnnotation[] = input.lines.map(() => ({
+    emotion: 'neutral' as DialogueEmotion,
+    tone: '',
+  }));
+  for (const entry of parsed.lines ?? []) {
+    if (typeof entry.i !== 'number' || entry.i < 0 || entry.i >= annotations.length) continue;
+    annotations[entry.i] = {
+      emotion: coerceEmotion(entry.emotion),
+      tone: typeof entry.tone === 'string' ? entry.tone.trim() : '',
+    };
+  }
+
+  return { genders, annotations };
 }
 
 export async function transcribeWithGeminiAudio(

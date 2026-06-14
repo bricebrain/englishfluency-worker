@@ -12,6 +12,8 @@ export interface Env {
   API_SECRET?: string;
   RUNPOD_API_KEY?: string;
   RUNPOD_AI_ENDPOINT_ID?: string;
+  // Secret classique (wrangler secret put) — lu directement comme string
+  DEEPGRAM_API_KEY?: string;
   // YouTube API keys (wrangler secret put)
   YT_READ_KEY_1?: string;
   YT_READ_KEY_2?: string;
