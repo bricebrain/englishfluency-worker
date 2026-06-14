@@ -283,8 +283,25 @@ function wordMatchesWeakness(word: PreparedWord, signals: string[]): boolean {
   return false;
 }
 
+function isAssimilWord(word: PreparedWord): boolean {
+  return word.id.startsWith('assim_');
+}
+
+function hasAssimilRecycleHistory(word: PreparedWord): boolean {
+  return word.review_history.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const result = (entry as { result?: unknown }).result;
+    const aiFeedback = (entry as { aiFeedback?: unknown }).aiFeedback;
+    return result === 'assim_recycled'
+      || (typeof aiFeedback === 'string' && aiFeedback.toLowerCase().includes('recycl'));
+  });
+}
+
 function rankWordForWeakness(word: PreparedWord, signals: string[]): number {
   let score = 0;
+  if (isAssimilWord(word)) score += 35;
+  if (hasAssimilRecycleHistory(word)) score += 35;
+  if (isAssimilWord(word) && word.repetitions <= 2) score += 5;
   if (wordMatchesWeakness(word, signals)) score += 20;
   score += (word.fail_count ?? 0) * 5;
   score += (word.almost_count ?? 0) * 2;
@@ -295,7 +312,8 @@ function rankWordForWeakness(word: PreparedWord, signals: string[]): number {
 }
 
 function orderWordsForWeakness<T extends PreparedWord>(words: T[], signals: string[], limit: number): T[] {
-  if (!signals.length) return words.slice(0, limit);
+  const hasAssimilWords = words.some(isAssimilWord);
+  if (!signals.length && !hasAssimilWords) return words.slice(0, limit);
 
   return [...words]
     .sort((a, b) => {
@@ -547,7 +565,7 @@ function upsertCardStatement(env: Env, profileId: string, card: PreparedCard): D
 
 async function loadSessionWords(env: Env, profileId: string, limit: number): Promise<PreparedWord[]> {
   const weaknessSignals = await loadRecentWeaknessSignals(env, profileId);
-  const candidateLimit = weaknessSignals.length ? Math.min(limit * 3, 160) : limit;
+  const candidateLimit = Math.min(Math.max(limit * 5, 80), 160);
   const dueResult = await env.DB.prepare(`
     SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD},
       wp.prochaine_revision, wp.intervalle, wp.facilite, wp.repetitions,
@@ -556,7 +574,9 @@ async function loadSessionWords(env: Env, profileId: string, limit: number): Pro
     FROM words w
     INNER JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
     WHERE wp.repetitions > 0 AND wp.prochaine_revision <= datetime('now')
-    ORDER BY wp.prochaine_revision ASC
+    ORDER BY
+      CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
+      wp.prochaine_revision ASC
     LIMIT ?
   `).bind(profileId, candidateLimit).all<SessionWordRow>();
 
@@ -570,7 +590,10 @@ async function loadSessionWords(env: Env, profileId: string, limit: number): Pro
     FROM words w
     LEFT JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
     WHERE wp.id IS NULL
-    ORDER BY w.frequence DESC, w.niveau ASC
+    ORDER BY
+      CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
+      w.frequence DESC,
+      w.niveau ASC
     LIMIT ?
   `).bind(profileId, newCandidateLimit).all<WordRow>();
 

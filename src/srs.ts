@@ -264,7 +264,9 @@ export async function handleSrsSession(req: Request, env: Env): Promise<Response
     FROM words w
     INNER JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
     WHERE wp.repetitions > 0 AND wp.prochaine_revision <= datetime('now')
-    ORDER BY wp.prochaine_revision ASC
+    ORDER BY
+      CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
+      wp.prochaine_revision ASC
     LIMIT ?
   `).bind(profileId, limit).all<SessionWordRow>();
 
@@ -286,7 +288,10 @@ export async function handleSrsSession(req: Request, env: Env): Promise<Response
       FROM words w
       LEFT JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
       WHERE wp.id IS NULL
-      ORDER BY w.frequence DESC, w.niveau ASC
+      ORDER BY
+        CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
+        w.frequence DESC,
+        w.niveau ASC
       LIMIT ?
     `).bind(profileId, newLimit).all<WordRow>();
 
