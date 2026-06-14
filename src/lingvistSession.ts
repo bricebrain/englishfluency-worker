@@ -1,5 +1,6 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
+import { formatLesson, safeJsonParse, type AssimilLessonRow } from './assimilModel';
 
 const SCHEMA_VERSION = 4;
 
@@ -88,6 +89,31 @@ interface PreparedCard {
   qualityReasons?: string[];
   qualityScore?: number;
   qualityStatus?: 'valid' | 'rebuilt' | 'needs_regeneration';
+  sourceLesson?: AssimilCardSource;
+  nativeAudio?: AssimilNativeAudio;
+}
+
+interface AssimilCardSource {
+  provider: 'assimil';
+  lessonIndex: number;
+  lessonCode: string;
+  titleEn: string | null;
+  titleFr: string | null;
+  level: string;
+  recycled: boolean;
+}
+
+interface AssimilNativeAudio {
+  audioUrl: string;
+  start: number;
+  end: number;
+  speakerLabel: string;
+  speakerNumber: number;
+  gender: 'female' | 'male' | 'unknown';
+  emotion: string;
+  tone: string;
+  text: string;
+  textFr: string;
 }
 
 interface CardQuality {
@@ -96,6 +122,18 @@ interface CardQuality {
   reasons: string[];
   score: number;
   sourceQuality: 'local_validated' | 'remote_validated' | 'remote_rejected';
+}
+
+interface AssimilDialogueLine {
+  speakerLabel?: string;
+  speakerNumber?: number;
+  gender?: 'female' | 'male' | 'unknown';
+  text?: string;
+  textFr?: string;
+  emotion?: string;
+  tone?: string;
+  start?: number;
+  end?: number;
 }
 
 const SELECT_WORD = `
@@ -194,6 +232,84 @@ function normalize(value: string): string {
     .toLowerCase()
     .replace(/[^\w\s']/g, '')
     .replace(/\s+/g, ' ');
+}
+
+function normalizedContains(haystack: string, needle: string): boolean {
+  const normalizedHaystack = normalize(haystack);
+  const normalizedNeedle = normalize(needle);
+  return Boolean(normalizedHaystack && normalizedNeedle && normalizedHaystack.includes(normalizedNeedle));
+}
+
+function parseLessonIndexFromCode(code: string): number | null {
+  const match = code.match(/L(\d{3})/i);
+  if (!match) return null;
+  const index = Number(match[1]);
+  return Number.isInteger(index) ? index : null;
+}
+
+function extractAssimilLessonIndex(word: PreparedWord): number | null {
+  const idMatch = word.id.match(/^assim_l(\d{3})_/i);
+  if (idMatch) return Number(idMatch[1]);
+
+  for (const entry of word.review_history) {
+    if (!entry || typeof entry !== 'object') continue;
+    const feedback = (entry as { aiFeedback?: unknown }).aiFeedback;
+    if (typeof feedback !== 'string') continue;
+    const index = parseLessonIndexFromCode(feedback);
+    if (index !== null) return index;
+  }
+
+  return null;
+}
+
+function parseAssimilDialogue(row: AssimilLessonRow | null): AssimilDialogueLine[] {
+  if (!row?.audio_json) return [];
+  const audio = safeJsonParse<{ dialogue?: AssimilDialogueLine[] }>(row.audio_json, {});
+  return Array.isArray(audio.dialogue) ? audio.dialogue : [];
+}
+
+function scoreDialogueLine(line: AssimilDialogueLine, card: PreparedCard): number {
+  const text = cleanText(line.text);
+  if (!text) return 0;
+
+  let score = 0;
+  if (normalizedContains(text, card.expectedAnswer)) score += 60;
+  if (normalizedContains(text, card.lemma)) score += 50;
+  if (normalizedContains(card.sentenceFull, text)) score += 35;
+  if (normalizedContains(text, card.sentenceFull)) score += 35;
+
+  const cardWords = new Set(normalize(card.sentenceFull).split(' ').filter(Boolean));
+  const lineWords = normalize(text).split(' ').filter(Boolean);
+  const overlap = lineWords.filter((word) => cardWords.has(word)).length;
+  score += Math.min(30, overlap * 4);
+
+  if (Number.isFinite(line.start) && Number.isFinite(line.end)) score += 8;
+  return score;
+}
+
+function findNativeAudio(row: AssimilLessonRow | null, card: PreparedCard): AssimilNativeAudio | undefined {
+  const dialogue = parseAssimilDialogue(row);
+  if (!dialogue.length) return undefined;
+
+  const best = [...dialogue]
+    .map((line) => ({ line, score: scoreDialogueLine(line, card) }))
+    .filter((candidate) => candidate.score >= 55)
+    .sort((a, b) => b.score - a.score)[0]?.line;
+
+  if (!best || !Number.isFinite(best.start) || !Number.isFinite(best.end)) return undefined;
+
+  return {
+    audioUrl: formatLesson(row?.lesson_index ?? 0).audioUrl,
+    start: Number(best.start),
+    end: Number(best.end),
+    speakerLabel: best.speakerLabel ?? 'speaker_0',
+    speakerNumber: Number(best.speakerNumber ?? 1),
+    gender: best.gender ?? 'unknown',
+    emotion: best.emotion ?? 'neutral',
+    tone: best.tone ?? '',
+    text: cleanText(best.text),
+    textFr: cleanText(best.textFr),
+  };
 }
 
 function pickBestExample(word: PreparedWord): { en: string; fr: string } {
@@ -469,6 +585,49 @@ function serializeCard(row: CardRow): PreparedCard {
   };
 }
 
+async function loadAssimilLessonRowsForWords(
+  env: Env,
+  words: PreparedWord[],
+): Promise<Map<number, AssimilLessonRow>> {
+  const indexes = [...new Set(
+    words.map(extractAssimilLessonIndex).filter((index): index is number => index !== null),
+  )];
+  if (!indexes.length) return new Map();
+
+  const placeholders = indexes.map(() => '?').join(', ');
+  const result = await env.DB.prepare(`
+    SELECT * FROM assimil_lessons
+    WHERE lesson_index IN (${placeholders})
+  `).bind(...indexes).all<AssimilLessonRow>();
+
+  return new Map(result.results.map((row) => [row.lesson_index, row]));
+}
+
+function attachAssimilMetadata(
+  word: PreparedWord,
+  card: PreparedCard,
+  lessonsByIndex: Map<number, AssimilLessonRow>,
+): PreparedCard {
+  const lessonIndex = extractAssimilLessonIndex(word);
+  if (lessonIndex === null) return card;
+
+  const base = formatLesson(lessonIndex);
+  const row = lessonsByIndex.get(lessonIndex) ?? null;
+  return {
+    ...card,
+    sourceLesson: {
+      provider: 'assimil',
+      lessonIndex,
+      lessonCode: base.code,
+      titleEn: row?.title_en ?? null,
+      titleFr: row?.title_fr ?? null,
+      level: row?.level ?? base.level,
+      recycled: hasAssimilRecycleHistory(word),
+    },
+    nativeAudio: findNativeAudio(row, card),
+  };
+}
+
 function assessCardQuality(word: PreparedWord, card: PreparedCard): CardQuality {
   const reasons: string[] = [];
   const expectedTargetPos = isVerbLike(word.type) ? 'verb' : 'other';
@@ -614,6 +773,7 @@ async function loadPreparedCards(
 
   const placeholders = words.map(() => '?').join(', ');
   const ids = words.map((word) => word.id);
+  const assimilLessonsByIndex = await loadAssimilLessonRowsForWords(env, words);
   const existing = await env.DB.prepare(`
     SELECT * FROM lingvist_cards
     WHERE profile_id = ? AND word_id IN (${placeholders}) AND schema_version = ?
@@ -663,7 +823,12 @@ async function loadPreparedCards(
   }
 
   return {
-    cards: words.map((word) => byWordId.get(word.id)).filter((card): card is PreparedCard => Boolean(card)),
+    cards: words
+      .map((word) => {
+        const card = byWordId.get(word.id);
+        return card ? attachAssimilMetadata(word, card, assimilLessonsByIndex) : null;
+      })
+      .filter((card): card is PreparedCard => Boolean(card)),
     rebuilt: missingCards.length,
     reused,
     rejected,
