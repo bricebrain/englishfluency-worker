@@ -38,6 +38,7 @@ import {
   handleAssimilTranscriptionStatus,
   handleGenerateAssimilLesson,
   handleGetAssimilLesson,
+  handleRecycleAssimilLesson,
   handleTranscribeAssimilLesson,
   handleUpsertAssimilTranscript,
 } from './assimil';
@@ -104,6 +105,9 @@ export default {
     }
     if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/generate$/)) {
       return handleGenerateAssimilLesson(req, env, path.split('/')[3]);
+    }
+    if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/recycle$/)) {
+      return handleRecycleAssimilLesson(req, env, path.split('/')[3]);
     }
 
     // ── Profils ──────────────────────────────────────────────────────────

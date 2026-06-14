@@ -31,11 +31,13 @@ import {
 import {
   LESSON_PREFIX,
   type AssimilLevel,
+  type AssimilLessonArtifact,
   TOTAL_LESSONS,
   formatLesson,
   parseLessonIndex,
   parseLimit,
   rowToLesson,
+  safeJsonParse,
 } from './assimilModel';
 import {
   getAssimilLessonRow,
@@ -129,6 +131,119 @@ export async function handleGetAssimilLesson(_req: Request, env: Env, rawIndex: 
 
   const row = await getAssimilLessonRow(env, index);
   return json({ lesson: rowToLesson(row, index) });
+}
+
+interface RecycleAssimilRequest {
+  limit?: number;
+  profileId: string;
+}
+
+function slugForId(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48) || crypto.randomUUID();
+}
+
+function normalizeRecycleTerm(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function findExampleForTarget(
+  artifact: AssimilLessonArtifact,
+  term: string,
+): { en: string; fr: string } {
+  const normalizedTerm = term.toLowerCase();
+  const sentences = artifact.sentences ?? [];
+  const exact = sentences.find((sentence) => sentence.textEn.toLowerCase().includes(normalizedTerm));
+  const fallback = sentences[0];
+  return {
+    en: exact?.textEn ?? fallback?.textEn ?? term,
+    fr: exact?.textFr ?? fallback?.textFr ?? '',
+  };
+}
+
+export async function handleRecycleAssimilLesson(req: Request, env: Env, rawIndex: string): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const index = parseLessonIndex(rawIndex);
+  if (index === null) return err('lesson index invalide', 400);
+
+  const body = await req.json<RecycleAssimilRequest>().catch(() => null);
+  if (!body?.profileId) return err('profileId requis', 400);
+
+  const row = await getAssimilLessonRow(env, index);
+  if (!row?.lesson_json || row.lesson_json === '{}') return err('Leçon non générée', 409);
+
+  const artifact = safeJsonParse<AssimilLessonArtifact | null>(row.lesson_json, null);
+  if (!artifact?.recyclingTargets?.length) return json({ ok: true, promoted: 0, created: 0, skipped: 0 });
+
+  const base = formatLesson(index);
+  const limit = Math.min(Math.max(Number(body.limit ?? 8), 1), 12);
+  const seen = new Set<string>();
+  let promoted = 0;
+  let created = 0;
+  let skipped = 0;
+
+  for (const target of artifact.recyclingTargets.slice(0, limit)) {
+    const term = normalizeRecycleTerm(target.term ?? '');
+    const key = term.toLowerCase();
+    if (!term || seen.has(key)) {
+      skipped += 1;
+      continue;
+    }
+    seen.add(key);
+
+    const example = findExampleForTarget(artifact, term);
+    const existing = await env.DB.prepare(
+      'SELECT id FROM words WHERE LOWER(mot) = LOWER(?) LIMIT 1',
+    ).bind(term).first<{ id: string }>();
+
+    let wordId = existing?.id;
+    if (!wordId) {
+      wordId = `assim_${base.code.toLowerCase()}_${slugForId(term)}`;
+      await env.DB.prepare(`
+        INSERT OR IGNORE INTO words (id, mot, type, niveau, traduction, examples, audio_uk, audio_us, frequence)
+        VALUES (?, ?, ?, ?, ?, ?, '', '', 4)
+      `).bind(
+        wordId,
+        term,
+        target.skill === 'grammar' ? 'phrase' : 'noun',
+        base.level,
+        target.reasonFr || term,
+        JSON.stringify([{ en: example.en, fr: example.fr || target.reasonFr || term }]),
+      ).run();
+      created += 1;
+    }
+
+    const progressId = `${body.profileId}_${wordId}`;
+    await env.DB.prepare(`
+      INSERT INTO word_progress (
+        id, profile_id, word_id, prochaine_revision, intervalle, facilite, repetitions,
+        derniere_revision, seen_count, success_count, almost_count, fail_count,
+        level, status, review_history, updated_at
+      ) VALUES (?, ?, ?, datetime('now'), 0, 2.5, 1, datetime('now'), 1, 0, 0, 0, 1, 'learning', ?, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        prochaine_revision = datetime('now'),
+        status = 'learning',
+        updated_at = datetime('now')
+    `).bind(
+      progressId,
+      body.profileId,
+      wordId,
+      JSON.stringify([{
+        date: new Date().toISOString(),
+        result: 'assim_recycled',
+        aiFeedback: `Recyclé depuis ${base.code}: ${artifact.titleEn || artifact.titleFr || base.title}`,
+      }]),
+    ).run();
+    promoted += 1;
+  }
+
+  return json({ ok: true, promoted, created, skipped });
 }
 
 export async function handleAssimilRunPodStatus(req: Request, env: Env): Promise<Response> {
