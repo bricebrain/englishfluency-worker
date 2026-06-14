@@ -1,6 +1,7 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
 import { AssimilGenerationError, generateAssimilArtifact } from './assimilGeneration';
+import { GeminiAudioError, transcribeWithGeminiAudio } from './assimilGemini';
 import { OpenAITranscriptionError, transcribeWithOpenAI } from './assimilOpenAI';
 import {
   RunPodTranscriptionError,
@@ -181,7 +182,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
   if (index === null) return err('lesson index invalide', 400);
 
   const body = await req.json<{
-    provider?: 'openai' | 'runpod';
+    provider?: 'auto' | 'gemini' | 'openai' | 'runpod';
     model?: string;
     force?: boolean;
     generate?: boolean;
@@ -217,8 +218,10 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
   if (!audioObject) return err(`Audio Assimil introuvable: ${base.key}`, 404);
 
   const audioBuffer = await audioObject.arrayBuffer();
-  const provider = body?.provider ?? 'openai';
+  const provider = body?.provider ?? 'auto';
+  let resolvedProvider: 'gemini' | 'openai' | 'runpod' = provider === 'auto' ? 'gemini' : provider;
   let transcription;
+  let audioAnalysis: Record<string, unknown> | undefined;
   try {
     const initialPrompt = `English lesson ${base.code}. Short clear phrases for French learners.`;
     if (provider === 'runpod') {
@@ -249,7 +252,43 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
         model: body?.model,
         initialPrompt,
       });
+    } else if (provider === 'gemini' || provider === 'auto') {
+      try {
+        const result = await transcribeWithGeminiAudio(env, {
+          audio: audioBuffer,
+          filename: `${base.code}-LESSON.mp3`,
+          mimeType: 'audio/mpeg',
+          lessonCode: base.code,
+          model: body?.model,
+        });
+        transcription = result.transcription;
+        audioAnalysis = {
+          provider: 'gemini',
+          model: transcription.model,
+          titleEn: result.analysis.titleEn,
+          titleFr: result.analysis.titleFr,
+          summaryFr: result.analysis.summaryFr,
+          transcriptFr: result.analysis.transcriptFr,
+          speakers: result.analysis.speakers ?? [],
+          segments: result.analysis.segments ?? [],
+          pedagogicalNotes: result.analysis.pedagogicalNotes ?? [],
+        };
+      } catch (error) {
+        if (provider === 'gemini') throw error;
+        resolvedProvider = 'openai';
+        transcription = await transcribeWithOpenAI(env, {
+          audio: audioBuffer,
+          filename: `${base.code}-LESSON.mp3`,
+          model: undefined,
+          prompt: initialPrompt,
+        });
+        audioAnalysis = {
+          provider: 'openai_fallback',
+          reason: error instanceof GeminiAudioError ? error.message : 'Gemini audio unavailable',
+        };
+      }
     } else {
+      resolvedProvider = 'openai';
       transcription = await transcribeWithOpenAI(env, {
         audio: audioBuffer,
         filename: `${base.code}-LESSON.mp3`,
@@ -258,7 +297,9 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
       });
     }
   } catch (error) {
-    const message = error instanceof RunPodTranscriptionError || error instanceof OpenAITranscriptionError
+    const message = error instanceof RunPodTranscriptionError
+      || error instanceof OpenAITranscriptionError
+      || error instanceof GeminiAudioError
       ? error.message
       : 'Transcription impossible';
     return err(message, 502);
@@ -267,7 +308,8 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
   await upsertAssimilLesson(env, index, {
     status: 'transcript_ready',
     transcript: cleanAssimilTranscript(transcription.text),
-    transcriptSource: `${provider}:${transcription.model}`,
+    transcriptSource: `${resolvedProvider}:${transcription.model}`,
+    audioAnalysis,
   });
 
   if (body?.generate) {
@@ -281,7 +323,8 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
         titleEn: artifact.titleEn,
         titleFr: artifact.titleFr,
         transcript: cleanedTranscript,
-        transcriptSource: `${provider}:${transcription.model}`,
+        transcriptSource: `${resolvedProvider}:${transcription.model}`,
+        audioAnalysis,
         artifact,
         generatedBy: 'deepseek-v4-flash',
       });
@@ -294,7 +337,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
     cached: false,
     transcription: {
       model: transcription.model,
-      provider: transcription.provider ?? provider,
+      provider: transcription.provider ?? resolvedProvider,
       device: transcription.device,
       computeType: transcription.computeType,
       language: transcription.language,
