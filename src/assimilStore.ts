@@ -52,8 +52,8 @@ export async function upsertAssimilLesson(
        transcript_source=COALESCE(excluded.transcript_source, assimil_lessons.transcript_source),
        transcription_job_id=COALESCE(excluded.transcription_job_id, assimil_lessons.transcription_job_id),
        transcription_status=COALESCE(excluded.transcription_status, assimil_lessons.transcription_status),
-       audio_json=COALESCE(excluded.audio_json, assimil_lessons.audio_json),
-       lesson_json=COALESCE(excluded.lesson_json, assimil_lessons.lesson_json),
+       audio_json=CASE WHEN ? THEN excluded.audio_json ELSE assimil_lessons.audio_json END,
+       lesson_json=CASE WHEN ? THEN excluded.lesson_json ELSE assimil_lessons.lesson_json END,
        generated_by=COALESCE(excluded.generated_by, assimil_lessons.generated_by),
        updated_at=datetime('now')`,
   ).bind(
@@ -70,6 +70,8 @@ export async function upsertAssimilLesson(
     values.audioAnalysis === undefined ? null : JSON.stringify(values.audioAnalysis ?? {}),
     values.artifact === undefined ? null : JSON.stringify(values.artifact ?? {}),
     values.generatedBy ?? null,
+    values.audioAnalysis === undefined ? 0 : 1,
+    values.artifact === undefined ? 0 : 1,
   ).run();
 }
 
