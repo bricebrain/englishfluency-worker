@@ -82,6 +82,12 @@ export interface RunPodTranscriptionStatus {
   transcription?: WhisperTranscription;
 }
 
+export interface RunPodHealthResult {
+  id?: string;
+  status?: string;
+  output?: unknown;
+}
+
 export class RunPodTranscriptionError extends Error {
   constructor(message: string) {
     super(message);
@@ -356,5 +362,40 @@ export async function getRunPodTranscriptionStatus(
     id: data.id,
     status: data.status ?? 'UNKNOWN',
     error: data.error,
+  };
+}
+
+export async function runRunPodHealthCheck(env: Env): Promise<RunPodHealthResult> {
+  const { endpointId, apiKey } = getRunPodConfig(env);
+  const res = await fetch(`https://api.runpod.ai/v2/${endpointId}/runsync`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ input: { task: 'health' } }),
+    signal: AbortSignal.timeout(120_000),
+  }).catch((error) => {
+    throw new RunPodTranscriptionError(error instanceof Error ? error.message : 'RunPod fetch failed');
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw runPodHttpError(res.status, text, {
+      endpointId,
+      apiKeyLength: apiKey.length,
+    });
+  }
+
+  const data = await res.json<RunPodEnvelope>().catch(() => null);
+  if (!data) throw new RunPodTranscriptionError('RunPod health JSON invalide');
+  if (data.output?.ok === false) {
+    throw new RunPodTranscriptionError(data.output.error ?? 'RunPod health returned ok=false');
+  }
+
+  return {
+    id: data.id,
+    status: data.status,
+    output: data.output?.output,
   };
 }

@@ -6,6 +6,7 @@ import {
   RunPodTranscriptionError,
   getRunPodTranscriptionStatus,
   normalizeRunPodApiKey,
+  runRunPodHealthCheck,
   submitRunPodTranscriptionJob,
   transcribeWithRunPod,
 } from './assimilRunpod';
@@ -128,6 +129,20 @@ export async function handleAssimilRunPodStatus(req: Request, env: Env): Promise
     hasEndpointId: Boolean(endpointId),
     endpointId,
   });
+}
+
+export async function handleAssimilRunPodHealth(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  try {
+    const result = await runRunPodHealthCheck(env);
+    return json({ ok: true, runpod: result });
+  } catch (error) {
+    const message = error instanceof RunPodTranscriptionError
+      ? error.message
+      : 'RunPod health impossible';
+    return err(message, 502);
+  }
 }
 
 export async function handleUpsertAssimilTranscript(req: Request, env: Env, rawIndex: string): Promise<Response> {

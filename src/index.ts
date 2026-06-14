@@ -33,6 +33,7 @@ import {
 import { handleGetDailyMission, handleGetLearningInsights, handleTrackLearningEvent } from './learning';
 import {
   handleAssimilRunPodStatus,
+  handleAssimilRunPodHealth,
   handleAssimilLessons,
   handleAssimilTranscriptionStatus,
   handleGenerateAssimilLesson,
@@ -88,6 +89,7 @@ export default {
     }
     if (method === 'GET' && path === '/assimil/lessons') return handleAssimilLessons(req, env);
     if (method === 'GET' && path === '/assimil/runpod/status') return handleAssimilRunPodStatus(req, env);
+    if (method === 'POST' && path === '/assimil/runpod/health') return handleAssimilRunPodHealth(req, env);
     if (method === 'GET' && path.match(/^\/assimil\/lesson\/\d+$/)) {
       return handleGetAssimilLesson(req, env, path.split('/')[3]);
     }
