@@ -46,3 +46,7 @@ export function cleanAssimilTranscript(raw: string): string {
 
   return cleaned.join('\n\n').trim() || raw.trim();
 }
+
+export function preserveAssimilTranscript(raw: string): string {
+  return splitTranscriptLines(raw).join('\n\n').trim() || raw.trim();
+}

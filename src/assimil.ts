@@ -11,7 +11,7 @@ import {
   submitRunPodTranscriptionJob,
   transcribeWithRunPod,
 } from './assimilRunpod';
-import { cleanAssimilTranscript } from './assimilTranscript';
+import { cleanAssimilTranscript, preserveAssimilTranscript } from './assimilTranscript';
 import {
   LESSON_PREFIX,
   type AssimilLevel,
@@ -161,13 +161,13 @@ export async function handleUpsertAssimilTranscript(req: Request, env: Env, rawI
 
   const transcript = body?.transcript?.trim();
   if (!transcript || transcript.length < 20) return err('transcript requis', 400);
-  const cleanedTranscript = cleanAssimilTranscript(transcript);
+  const preservedTranscript = preserveAssimilTranscript(transcript);
 
   await upsertAssimilLesson(env, index, {
     status: 'transcript_ready',
     titleEn: body?.titleEn ?? null,
     titleFr: body?.titleFr ?? null,
-    transcript: cleanedTranscript,
+    transcript: preservedTranscript,
     transcriptSource: body?.transcriptSource ?? 'manual',
   });
 
@@ -307,13 +307,14 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
 
   await upsertAssimilLesson(env, index, {
     status: 'transcript_ready',
-    transcript: cleanAssimilTranscript(transcription.text),
+    transcript: preserveAssimilTranscript(transcription.text),
     transcriptSource: `${resolvedProvider}:${transcription.model}`,
     audioAnalysis,
   });
 
   if (body?.generate) {
     const cleanedTranscript = cleanAssimilTranscript(transcription.text);
+    const preservedTranscript = preserveAssimilTranscript(transcription.text);
     const artifactResult = await generateArtifactResponse(env, index, base.level, cleanedTranscript);
     if (!artifactResult.ok) return artifactResult.response;
     const { artifact } = artifactResult;
@@ -322,7 +323,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
         status: 'generated',
         titleEn: artifact.titleEn,
         titleFr: artifact.titleFr,
-        transcript: cleanedTranscript,
+        transcript: preservedTranscript,
         transcriptSource: `${resolvedProvider}:${transcription.model}`,
         audioAnalysis,
         artifact,

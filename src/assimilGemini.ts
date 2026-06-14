@@ -86,6 +86,8 @@ function buildAssimilAudioPrompt(lessonCode: string): string {
     '- "transcriptEn" doit être la transcription complète et chronologique de tout ce qui est prononcé en anglais, pas une synthèse.',
     '- "segments" doit contenir les unités réellement prononcées, même si elles se répètent. Ne déduplique pas les segments.',
     '- Garde les phrases anglaises naturelles, mais n’ajoute pas de mots non entendus.',
+    '- Si un mot court, un nom propre, une lettre, un chiffre, une contraction ou une correction isolée arrive après une phrase, crée un segment séparé pour ce mot. Ne le rattache pas silencieusement et ne le supprime jamais.',
+    '- Si tu hésites entre omission et conservation, conserve le mot dans un segment court.',
     '- Si plusieurs voix existent, distingue les locuteurs au mieux avec speakerLabel.',
     '- inferredGender est seulement une estimation audio très incertaine: utilise "unknown" par défaut, sauf si la voix est absolument évidente.',
     '- Ne t’appuie pas sur le rôle du dialogue pour deviner le genre. Une voix féminine peut lire un rôle masculin, et inversement.',
