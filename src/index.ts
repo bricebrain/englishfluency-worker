@@ -42,6 +42,7 @@ import {
   handleTranscribeAssimilLesson,
   handleUpsertAssimilTranscript,
 } from './assimil';
+import { handleAssimilExerciseSession } from './assimilExerciseSession';
 
 export default {
   // ── Cron — podcast du jour (7h / 12h / 18h UTC) ─────────────────────────
@@ -108,6 +109,9 @@ export default {
     }
     if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/recycle$/)) {
       return handleRecycleAssimilLesson(req, env, path.split('/')[3]);
+    }
+    if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/exercise-session$/)) {
+      return handleAssimilExerciseSession(req, env, path.split('/')[3]);
     }
 
     // ── Profils ──────────────────────────────────────────────────────────
