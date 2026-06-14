@@ -77,6 +77,12 @@ export interface DialogueLine {
   tone: string;
   start: number;
   end: number;
+  words?: Array<{
+    word: string;
+    start: number;
+    end: number;
+    probability?: number;
+  }>;
 }
 
 export interface DialogueAnnotation {
@@ -89,6 +95,7 @@ interface DiarizedSegment {
   end: number;
   text: string;
   speaker?: string | null;
+  words?: DialogueLine['words'];
 }
 
 function genderLabelFr(gender: DialogueGender): string {
@@ -155,6 +162,7 @@ export function buildAssimilDialogue(
       tone: '',
       start: segment.start,
       end: segment.end,
+      words: segment.words,
     });
   }
 
