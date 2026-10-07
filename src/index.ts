@@ -43,6 +43,7 @@ import {
   handleResetAssimilGeneratedArtifacts,
   handleTranscribeAssimilLesson,
   handleUpsertAssimilTranscript,
+  handleAssimilProgress,
 } from './assimil';
 import { handleAssimilExerciseSession } from './assimilExerciseSession';
 import {
@@ -147,6 +148,7 @@ export default {
       return handleServeAudio(req, env, key);
     }
     if (method === 'GET' && path === '/assimil/lessons') return handleAssimilLessons(req, env);
+    if (method === 'GET' && path === '/assimil/progress') return handleAssimilProgress(req, env);
     if (method === 'GET' && path === '/assimil/runpod/status') return handleAssimilRunPodStatus(req, env);
     if (method === 'POST' && path === '/assimil/runpod/health') return handleAssimilRunPodHealth(req, env);
     if (method === 'GET' && path === '/assimil/preparation/status') return handleAssimilPreparationStatus(req, env);

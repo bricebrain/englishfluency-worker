@@ -304,7 +304,84 @@ export async function handleRecycleAssimilLesson(req: Request, env: Env, rawInde
     promoted += 1;
   }
 
+  // Trace le recyclage dans le journal commun : il alimente la progression
+  // personnelle de la leçon (étape « Garder »).
+  if (promoted > 0) {
+    await env.DB.prepare(`
+      INSERT INTO learning_events (
+        id, profile_id, module, event_type, skill, content_id, payload, occurred_at
+      ) VALUES (?, ?, 'listen', 'expression_reinforced', 'vocabulary', ?, ?, ?)
+    `).bind(
+      `${body.profileId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      body.profileId,
+      base.id,
+      JSON.stringify({ source: 'assimil_recycle', lessonIndex: index, lessonCode: base.code, promoted }),
+      new Date().toISOString(),
+    ).run();
+  }
+
   return json({ ok: true, promoted, created, skipped });
+}
+
+// ─── GET /assimil/progress?profileId= ────────────────────────────────────────
+// Progression personnelle par leçon, dérivée de learning_events (aucune table
+// dédiée) : écoute brute → lecture guidée → exercices → expressions gardées.
+
+interface LessonProgress {
+  index: number;
+  listened: boolean;
+  guided: boolean;
+  exercises: number;
+  kept: number;
+  lastAt: string | null;
+}
+
+export async function handleAssimilProgress(req: Request, env: Env): Promise<Response> {
+  const profileId = new URL(req.url).searchParams.get('profileId') ?? 'default';
+
+  const result = await env.DB.prepare(`
+    SELECT event_type, payload, occurred_at
+    FROM learning_events
+    WHERE profile_id = ? AND module = 'listen'
+    ORDER BY occurred_at DESC
+    LIMIT 3000
+  `).bind(profileId).all<{ event_type: string; payload: string; occurred_at: string }>();
+
+  const byLesson = new Map<number, LessonProgress & { exerciseIds: Set<string> }>();
+
+  for (const row of result.results) {
+    const payload = safeJsonParse<Record<string, unknown>>(row.payload, {});
+    const index = Number(payload.lessonIndex);
+    if (!Number.isInteger(index) || index < 0 || index >= TOTAL_LESSONS) continue;
+
+    let entry = byLesson.get(index);
+    if (!entry) {
+      entry = { index, listened: false, guided: false, exercises: 0, kept: 0, lastAt: row.occurred_at, exerciseIds: new Set() };
+      byLesson.set(index, entry);
+    }
+
+    const source = typeof payload.source === 'string' ? payload.source : '';
+    if (source === 'assimil_audio') entry.listened = true;
+    if (source === 'assimil_guided_listen') {
+      entry.listened = true;
+      entry.guided = true;
+    }
+    if (source === 'assimil_recycle') entry.kept += Number(payload.promoted) || 0;
+    if (row.event_type === 'review_word' && typeof payload.exerciseId === 'string') {
+      // Une même série refaite ne compte qu'une fois.
+      if (!entry.exerciseIds.has(payload.exerciseId)) {
+        entry.exerciseIds.add(payload.exerciseId);
+        entry.exercises += 1;
+        entry.kept += Array.isArray(payload.promotedWordIds) ? payload.promotedWordIds.length : 0;
+      }
+    }
+  }
+
+  const lessons = [...byLesson.values()]
+    .map(({ exerciseIds: _exerciseIds, ...lesson }) => lesson)
+    .sort((a, b) => a.index - b.index);
+
+  return json({ lessons });
 }
 
 export async function handleAssimilRunPodStatus(req: Request, env: Env): Promise<Response> {
