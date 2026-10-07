@@ -639,7 +639,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'ask_0036', 'ask', 'verb', 'A1',
-  'demanderà', '/ˈɑːsk/', '/æsk, ɑsk/',
+  'demander (à)', '/ˈɑːsk/', '/æsk, ɑsk/',
   '', '', 'neutral',
   0, NULL, 5,
   '[{"en":"A man stopped me in the street and asked me the time.","fr":"Un homme m''a arrêté dans la rue pour me demander l''heure."},{"en":"She had to ask before the deadline.","fr":"Elle a dû demanderà avant la date limite."},{"en":"They will ask if the situation requires it.","fr":"Ils vont demanderà si la situation l''exige."}]', '["do","perform"]', '["ask a task","ask every day"]',
@@ -4995,7 +4995,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'give_0278', 'give', 'verb', 'A1',
-  'donnerà, passerà', '/ɡɪv/', '/ɡɪv/',
+  'donner, passer', '/ɡɪv/', '/ɡɪv/',
   '', '', 'neutral',
   0, NULL, 5,
   '[{"en":"Please give me the book.","fr":"S''il vous plaît, donnez-moi le livre."},{"en":"She gave him a hug.","fr":"Elle lui a donné un câlin."},{"en":"I give up on this puzzle.","fr":"J''abandonne ce puzzle."}]', '["provide","hand over","donate"]', '["give away","give back","give in"]',
@@ -11457,7 +11457,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'tell_0637', 'tell', 'verb', 'A1',
-  'direà', '/tɛl/', '/tɛl/',
+  'dire (à)', '/tɛl/', '/tɛl/',
   '', '', 'neutral',
   0, NULL, 5,
   '[{"en":"Tell me a story before bed.","fr":"Raconte-moi une histoire avant de dormir."},{"en":"She told him the truth about the accident.","fr":"Elle lui a dit la vérité sur l''accident."},{"en":"Can you tell me the time?","fr":"Peux-tu me dire l''heure ?"}]', '["inform","relate","recount"]', '["tell a story","tell the truth","tell someone"]',
@@ -12249,7 +12249,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'twelve_0681', 'twelve', 'noun', 'A1',
-  'douze,', '/twɛlv/', '/twɛlv/',
+  'douze', '/twɛlv/', '/twɛlv/',
   '', '', 'neutral',
   0, NULL, 5,
   '[{"en":"He bought twelve eggs.","fr":"Il a acheté douze œufs."},{"en":"The meeting is at twelve.","fr":"La réunion est à douze heures."},{"en":"She turned twelve last week.","fr":"Elle a eu douze ans la semaine dernière."}]', '["dozen"]', '["twelve o''clock","twelve months","twelve years old"]',
@@ -12951,7 +12951,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'will_0720', 'will', 'verb', 'A1',
-  '-', '/wɪl/', '/wɪl/',
+  'auxiliaire du futur', '/wɪl/', '/wɪl/',
   '', '', 'neutral',
   0, NULL, 5,
   '[{"en":"I will call you tomorrow after work.","fr":"Je t''appellerai demain après le travail."},{"en":"Will you help me with this box?","fr":"Veux-tu m''aider avec cette boîte ?"},{"en":"It will rain later this evening.","fr":"Il pleuvra plus tard ce soir."}]', '["shall","gonna"]', '["will be","will have","will not"]',
@@ -13761,7 +13761,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'allow_0765', 'allow', 'verb', 'A2',
-  'permettre àde faire', '/əˈlaʊ/', '/əˈlaʊ/',
+  'permettre (à … de faire)', '/əˈlaʊ/', '/əˈlaʊ/',
   '', '', 'neutral',
   0, NULL, 4,
   '[{"en":"Will your parents allow you to go to the dance?","fr":"Tes parents vont-ils te permettre d''aller à la soirée ?"},{"en":"She had to allow before the deadline.","fr":"Elle a dû permettre àde faire avant la date limite."},{"en":"They will allow if the situation requires it.","fr":"Ils vont permettre àde faire si la situation l''exige."}]', '["do","perform"]', '["allow a task","allow every day"]',
@@ -17955,7 +17955,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'feed_0998', 'feed', 'verb', 'A2',
-  'donner () à manger à', '/fiːd/', '/fiːd/',
+  'nourrir, donner à manger à', '/fiːd/', '/fiːd/',
   '', '', 'neutral',
   0, NULL, 5,
   '[{"en":"I need to feed the cat before leaving.","fr":"Je dois donner à manger au chat avant de partir."},{"en":"They feed the birds in the park every morning.","fr":"Ils nourrissent les oiseaux dans le parc tous les matins."},{"en":"The data feeds into the main system automatically.","fr":"Les données alimentent le système principal automatiquement."}]', '["nourish","supply","provide"]', '["feed the family","feed the dog","feed into"]',
@@ -22617,7 +22617,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'recommend_1257', 'recommend', 'verb', 'A2',
-  'recommander(à), recommander àde faire', '/ˌrɛkəˈmɛnd/', '/ˌrɛkəˈmɛnd/',
+  'recommander', '/ˌrɛkəˈmɛnd/', '/ˌrɛkəˈmɛnd/',
   '', '', 'neutral',
   0, NULL, 4,
   '[{"en":"His lawyers recommended that he settle quickly.","fr":"Ses avocats lui ont recommandé de régler l''affaire rapidement."},{"en":"She had to recommend before the deadline.","fr":"Elle a dû recommander(à), recommander àde faire avant la date limite."},{"en":"They will recommend if the situation requires it.","fr":"Ils vont recommander(à), recommander àde faire si la situation l''exige."}]', '["do","perform"]', '["recommend a task","recommend every day"]',
@@ -24471,7 +24471,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'suggest_1360', 'suggest', 'verb', 'A2',
-  'suggérer àde faire, conseiller àde faire', '/səˈdʒɛst/', '/səgˈdʒɛst, sə-/',
+  'suggérer, conseiller', '/səˈdʒɛst/', '/səgˈdʒɛst, sə-/',
   '', '', 'neutral',
   0, NULL, 4,
   '[{"en":"I suggest that you apologize.","fr":"Je vous suggère (or:conseille) de vous excuser."},{"en":"She had to suggest before the deadline.","fr":"Elle a dû suggérer àde faire, conseiller àde faire avant la date limite."},{"en":"They will suggest if the situation requires it.","fr":"Ils vont suggérer àde faire, conseiller àde faire si la situation l''exige."}]', '["do","perform"]', '["suggest a task","suggest every day"]',
@@ -30483,7 +30483,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'hang_1694', 'hang', 'verb', 'B1',
-  'accrocherà, suspendreà', '/hæŋ/', '/hæŋ/',
+  'accrocher, suspendre', '/hæŋ/', '/hæŋ/',
   '', '', 'neutral',
   0, NULL, 5,
   '[{"en":"They decided to hang the curtains.","fr":"Ils ont décidé d''accrocher les rideaux."},{"en":"She hung her keys on the rack.","fr":"Elle a accroché ses clés sur le porte-manteau."},{"en":"The moon hung low in the sky.","fr":"La lune était suspendue bas dans le ciel."}]', '["suspend","dangle","hook"]', '["hang up","hang out","hang on"]',
@@ -33075,7 +33075,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'possibly_1838', 'possibly', 'adverb', 'B1',
-  '-', '/ˈpɒsɪbli/', '/ˈpɑsəbli/',
+  'peut-être, éventuellement', '/ˈpɒsɪbli/', '/ˈpɑsəbli/',
   '', '', 'neutral',
   0, NULL, 3,
   '[{"en":"That''s more money than one person could possibly spend in their lifetime.","fr":"Essayez autant que possible de vous rappeler ce qui s''est passé."},{"en":"In conversation, people use possibly quite often.","fr":"En conversation, on utilise - assez souvent."},{"en":"Try adding possibly to make your sentence more precise.","fr":"Essaie d''ajouter - pour rendre ta phrase plus précise."}]', '["often","usually"]', '["possibly today","possibly enough"]',
@@ -34173,7 +34173,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'remind_1899', 'remind', 'verb', 'B1',
-  'rappelerà', '/rɪˈmaɪnd/', '/rɪˈmaɪnd/',
+  'rappeler (à)', '/rɪˈmaɪnd/', '/rɪˈmaɪnd/',
   '', '', 'neutral',
   0, NULL, 3,
   '[{"en":"I''ve got to leave at 5 p.m.; don''t forget to remind me.","fr":"Je dois partir à 17 h."},{"en":"She had to remind before the deadline.","fr":"Elle a dû rappelerà avant la date limite."},{"en":"They will remind if the situation requires it.","fr":"Ils vont rappelerà si la situation l''exige."}]', '["do","perform"]', '["remind a task","remind every day"]',
@@ -40095,7 +40095,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'expose_2228', 'expose', 'verb', 'B2',
-  'exposerà', '/ɪkˈspəʊz/', '/ɪkˈspoʊz/',
+  'exposer (à)', '/ɪkˈspəʊz/', '/ɪkˈspoʊz/',
   '', '', 'neutral',
   0, NULL, 2,
   '[{"en":"The employer provided protective equipment for his employees, as the work exposed them to harmful chemicals.","fr":"L''employeur fournissait du matériel de protection à ses employés étant donné que travailler ici les exposait à des produits chimiques nocifs."},{"en":"She had to expose before the deadline.","fr":"Elle a dû exposerà avant la date limite."},{"en":"They will expose if the situation requires it.","fr":"Ils vont exposerà si la situation l''exige."}]', '["do","perform"]', '["expose a task","expose every day"]',
@@ -42777,7 +42777,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'owe_2377', 'owe', 'verb', 'B2',
-  'devoirà', '/əʊ/', '/oʊ/',
+  'devoir (à)', '/əʊ/', '/oʊ/',
   '', '', 'neutral',
   0, NULL, 4,
   '[{"en":"I owe you ten dollars for the tickets.","fr":"Je te dois dix dollars pour les billets."},{"en":"He owes his success to hard work.","fr":"Il doit son succès au travail acharné."},{"en":"You owe it to yourself to take a break.","fr":"Tu te dois de prendre une pause."}]', '["be indebted","be obligated","be in debt"]', '["owe money","owe an apology","owe a debt of gratitude"]',
@@ -46647,7 +46647,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'assure_2592', 'assure', 'verb', 'B2',
-  'assurer àque', '/əˈʃʊə', '/əˈʃʊr/',
+  'assurer', '/əˈʃʊə', '/əˈʃʊr/',
   '', '', 'neutral',
   0, NULL, 2,
   '[{"en":"The tour guide assured the group that they would be able to see whales from the boat.","fr":"Le guide touristique a assuré au groupe qu''ils finiraient par voir les baleines du bateau."},{"en":"She had to assure before the deadline.","fr":"Elle a dû assurer àque avant la date limite."},{"en":"They will assure if the situation requires it.","fr":"Ils vont assurer àque si la situation l''exige."}]', '["do","perform"]', '["assure a task","assure every day"]',
@@ -48735,7 +48735,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'devote_2708', 'devote', 'verb', 'B2',
-  'consacrerà', '/dɪˈvəʊt/', '/dɪˈvoʊt/',
+  'consacrer (à)', '/dɪˈvəʊt/', '/dɪˈvoʊt/',
   '', '', 'formal',
   0, NULL, 3,
   '[{"en":"She devotes all her free time to volunteering.","fr":"Elle consacre tout son temps libre au bénévolat."},{"en":"He devoted himself to his career.","fr":"Il s''est consacré à sa carrière."},{"en":"The museum is devoted to modern art.","fr":"Le musée est consacré à l''art moderne."}]', '["dedicate","commit","allocate"]', '["devote time","devote energy","devote oneself to"]',
@@ -55053,7 +55053,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'restrict_3059', 'restrict', 'verb', 'B2',
-  'restreindreà', '/rɪˈstrɪkt/', '/rɪˈstrɪkt/',
+  'restreindre (à)', '/rɪˈstrɪkt/', '/rɪˈstrɪkt/',
   '', '', 'neutral',
   0, NULL, 2,
   '[{"en":"The pub restricted smoking to the beer garden and asked customers not to bring lighted cigarettes indoors.","fr":"Le pub restreignait l''espace fumeurs au jardin et demandait à ses clients de ne pas amener de cigarettes allumées à l''intérieur."},{"en":"She had to restrict before the deadline.","fr":"Elle a dû restreindreà avant la date limite."},{"en":"They will restrict if the situation requires it.","fr":"Ils vont restreindreà si la situation l''exige."}]', '["do","perform"]', '["restrict a task","restrict every day"]',
@@ -61479,7 +61479,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'compel_3416', 'compel', 'verb', 'C1',
-  'contraindreà faire', '/kəmˈpɛl/', '/kəmˈpɛl/',
+  'contraindre (à faire)', '/kəmˈpɛl/', '/kəmˈpɛl/',
   '', '', 'neutral',
   0, NULL, 1,
   '[{"en":"The threat of being fired compelled Tricia to tell the truth about what she saw.","fr":"La menace de licenciement contraignit Tricia à dire la vérité sur ce qu''elle avait vu."},{"en":"She had to compel before the deadline.","fr":"Elle a dû contraindreà faire avant la date limite."},{"en":"They will compel if the situation requires it.","fr":"Ils vont contraindreà faire si la situation l''exige."}]', '["do","perform"]', '["compel a task","compel every day"]',
@@ -64467,7 +64467,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'dispose_3582', 'dispose', 'verb', 'C1',
-  'disposerà', '/dɪˈspəʊz/', '/dɪˈspoʊz/',
+  'disposer', '/dɪˈspəʊz/', '/dɪˈspoʊz/',
   '', '', 'formal',
   1, 'Attention : ''dispose of'' signifie ''jeter, se débarrasser de'', tandis que ''disposer'' en français signifie ''arranger'' ou ''avoir à sa disposition''.', 3,
   '[{"en":"Please dispose of your trash in the bins provided.","fr":"Veuillez jeter vos déchets dans les poubelles prévues."},{"en":"The general disposed his troops along the border.","fr":"Le général a disposé ses troupes le long de la frontière."},{"en":"The new evidence disposed him to believe the theory.","fr":"Les nouvelles preuves l''ont disposé à croire la théorie."}]', '["arrange","place","position"]', '["dispose of waste","dispose assets","dispose troops"]',
@@ -65223,7 +65223,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'empower_3624', 'empower', 'verb', 'C1',
-  'donner plus de pouvoir à, donner àle pouvoir d''agir', '/ɪmˈpaʊə', '/ɛmˈpaʊɚ/',
+  'donner le pouvoir d''agir à', '/ɪmˈpaʊə', '/ɛmˈpaʊɚ/',
   '', '', 'neutral',
   0, NULL, 1,
   '[{"en":"It empowers girls when they see strong female characters in movies.","fr":"Cela émancipe les filles de voir des personnages féminins forts dans les films."},{"en":"She had to empower before the deadline.","fr":"Elle a dû donner plus de pouvoir à, donner àle pouvoir d''agir avant la date limite."},{"en":"They will empower if the situation requires it.","fr":"Ils vont donner plus de pouvoir à, donner àle pouvoir d''agir si la situation l''exige."}]', '["do","perform"]', '["empower a task","empower every day"]',
@@ -65583,7 +65583,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'entitle_3644', 'entitle', 'verb', 'C1',
-  'donner àle droit à', '/ɪnˈtaɪt', '/ɛnˈtaɪtəl/',
+  'donner droit à', '/ɪnˈtaɪt', '/ɛnˈtaɪtəl/',
   '', '', 'neutral',
   0, NULL, 1,
   '[{"en":"Being the boss entitles Linda to the biggest office.","fr":"Être la chef donne à Linda le droit d''occuper le plus grand bureau."},{"en":"She had to entitle before the deadline.","fr":"Elle a dû donner àle droit à avant la date limite."},{"en":"They will entitle if the situation requires it.","fr":"Ils vont donner àle droit à si la situation l''exige."}]', '["do","perform"]', '["entitle a task","entitle every day"]',
@@ -71379,7 +71379,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'oblige_3966', 'oblige', 'verb', 'C1',
-  'obligerà faire, forcerà faire, contraindreà faire', '/əˈblaɪdʒ/', '/əˈblaɪdʒ/',
+  'obliger, forcer (à faire)', '/əˈblaɪdʒ/', '/əˈblaɪdʒ/',
   '', '', 'neutral',
   0, NULL, 1,
   '[{"en":"Daniel''s behaviour obliged his mother to apologise on his behalf.","fr":"Le comportement de Daniel a forcé sa mère à s''excuser de sa part."},{"en":"She had to oblige before the deadline.","fr":"Elle a dû obligerà faire, forcerà faire, contraindreà faire avant la date limite."},{"en":"They will oblige if the situation requires it.","fr":"Ils vont obligerà faire, forcerà faire, contraindreà faire si la situation l''exige."}]', '["do","perform"]', '["oblige a task","oblige every day"]',
@@ -80883,7 +80883,7 @@ INSERT INTO words (
   examples, synonymes, collocations, famille_de_mots, tags
 ) VALUES (
   'give_back_4507', 'give back', 'phrasal verb', 'B2',
-  'rendre, rendreà', '/ɡɪv bæk/', '/ɡɪv bæk/',
+  'rendre', '/ɡɪv bæk/', '/ɡɪv bæk/',
   '', '', 'neutral',
   0, NULL, 5,
   '[{"en":"Please give back the book you borrowed.","fr":"Veuillez rendre le livre que vous avez emprunté."},{"en":"He gave back the money he had found.","fr":"Il a rendu l''argent qu''il avait trouvé."},{"en":"The company gave back to the community by donating.","fr":"L''entreprise a rendu à la communauté en faisant des dons."}]', '["return","restore","repay"]', '["give back a loan","give back a favor","give back to society"]',
