@@ -1,5 +1,6 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
+import { parseDbDate } from './srs';
 import {
   formatLesson,
   parseLessonIndex,
@@ -7,6 +8,11 @@ import {
   type AssimilLessonArtifact,
 } from './assimilModel';
 import { getAssimilLessonRow } from './assimilStore';
+
+// Politique de recyclage automatique (VOCABULARY_LEARNING_EVOLUTION.md) :
+// maximum 2 à 3 unités de forte valeur par exercice, priorité aux réponses
+// fausses, révélées et aux hésitations répétées.
+const RECYCLE_CAP = 3;
 
 type ExerciseResult = 'correct' | 'almost' | 'wrong' | 'done';
 
@@ -63,7 +69,21 @@ function skillForExercise(type: AssimilExerciseSessionBody['exerciseType']): 'li
 }
 
 function shouldRecycleAttempt(attempt: AssimilExerciseAttempt): boolean {
+  // Shadowing validé manuellement ('done') : pratique, pas une preuve — l'app
+  // l'envoie avec revealed=true puisque le modèle est toujours visible.
+  if (attempt.result === 'done') return false;
   return attempt.result === 'wrong' || attempt.result === 'almost' || attempt.attempts > 1 || attempt.revealed;
+}
+
+// Sévérité décroissante : wrong+revealed > wrong > almost+revealed > almost > hésitations.
+function attemptSeverity(attempt: AssimilExerciseAttempt): number {
+  let severity = 0;
+  if (attempt.result === 'wrong') severity += 3;
+  if (attempt.result === 'almost') severity += 2;
+  if (attempt.revealed) severity += 2;
+  if (attempt.attempts > 1) severity += 1;
+  if (attempt.attempts > 2) severity += 1;
+  return severity;
 }
 
 function findTranslation(artifact: AssimilLessonArtifact | null, expected: string, fallback: string): string {
@@ -87,61 +107,98 @@ async function promoteWeakAttempt(params: {
   const expected = normalizeSentence(params.attempt.expected);
   if (!expected || expected.length < 2) return { created: false, promoted: false, wordId: null };
 
-  const wordId = `assim_${params.lessonCode.toLowerCase()}_exercise_${slugForId(expected)}`;
+  // Déduplication : réutilise un mot existant (phrase déjà recyclée dans une
+  // autre leçon ou un autre exercice) au lieu de créer un doublon d'unité.
+  const existingWord = await params.env.DB.prepare(
+    'SELECT id FROM words WHERE LOWER(mot) = LOWER(?) LIMIT 1',
+  ).bind(expected).first<{ id: string }>();
+
+  const wordId = existingWord?.id ?? `assim_${params.lessonCode.toLowerCase()}_exercise_${slugForId(expected)}`;
   const translation = findTranslation(params.artifact, expected, params.attempt.hintFr || params.attempt.focus || expected);
   const grammarHint = params.attempt.focus || params.attempt.hintFr || `Revoir cette phrase depuis ${params.lessonCode}`;
 
-  const insertWord = await params.env.DB.prepare(`
-    INSERT OR IGNORE INTO words (
-      id, mot, type, niveau, traduction, examples, tags, audio_uk, audio_us, frequence, updated_at
-    ) VALUES (?, ?, 'phrase', ?, ?, ?, ?, '', '', 5, datetime('now'))
-  `).bind(
-    wordId,
-    expected,
-    params.lessonLevel,
-    grammarHint,
-    JSON.stringify([{ en: expected, fr: translation }]),
-    JSON.stringify(['assimil', params.lessonCode.toLowerCase(), params.attempt.exerciseType]),
-  ).run();
+  let insertChanges = 0;
+  if (!existingWord) {
+    const insertWord = await params.env.DB.prepare(`
+      INSERT OR IGNORE INTO words (
+        id, mot, type, niveau, traduction, examples, tags, audio_uk, audio_us, frequence, updated_at
+      ) VALUES (?, ?, 'phrase', ?, ?, ?, ?, '', '', 5, datetime('now'))
+    `).bind(
+      wordId,
+      expected,
+      params.lessonLevel,
+      grammarHint,
+      JSON.stringify([{ en: expected, fr: translation }]),
+      JSON.stringify(['assimil', params.lessonCode.toLowerCase(), params.attempt.exerciseType]),
+    ).run();
+    insertChanges = insertWord.meta?.changes ?? 0;
+  }
 
   const now = isoNow();
   const progressId = `${params.profileId}_${wordId}`;
+  const weakEntry = {
+    date: now,
+    result: 'assim_exercise_weak',
+    aiFeedback: `${params.lessonCode} · ${params.attempt.exerciseType}: ${params.attempt.focus || params.attempt.hintFr || 'phrase a consolider'}`,
+  };
+
+  const existingProgress = await params.env.DB.prepare(
+    'SELECT prochaine_revision, review_history FROM word_progress WHERE id = ?',
+  ).bind(progressId).first<{ prochaine_revision: string; review_history: string }>();
+
+  if (existingProgress) {
+    // Une nouvelle faiblesse complète l'historique au lieu de l'écraser, et une
+    // unité déjà programmée n'est pas remise à due-now : due demain au plus tôt,
+    // jamais reculée si elle était déjà due plus tôt.
+    let history: unknown[] = [];
+    try { history = JSON.parse(existingProgress.review_history || '[]'); } catch { /* keep empty */ }
+    const nextHistory = [...(Array.isArray(history) ? history : []), weakEntry].slice(-20);
+
+    const candidateMs = Date.now() + 1 * 86400000;
+    const existingMs = parseDbDate(existingProgress.prochaine_revision);
+    const prochaine = existingMs !== null && existingMs < candidateMs
+      ? existingProgress.prochaine_revision
+      : new Date(candidateMs).toISOString();
+
+    await params.env.DB.prepare(`
+      UPDATE word_progress SET
+        prochaine_revision = ?,
+        almost_count = almost_count + ?,
+        fail_count = fail_count + ?,
+        seen_count = seen_count + 1,
+        status = 'learning',
+        review_history = ?,
+        updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(
+      prochaine,
+      params.attempt.result === 'almost' ? 1 : 0,
+      params.attempt.result === 'wrong' ? 1 : 0,
+      JSON.stringify(nextHistory),
+      progressId,
+    ).run();
+
+    return { created: insertChanges > 0, promoted: true, wordId };
+  }
+
+  // Nouvelle unité : due immédiatement, historique initial.
   await params.env.DB.prepare(`
     INSERT INTO word_progress (
       id, profile_id, word_id, prochaine_revision, intervalle, facilite, repetitions,
       derniere_revision, seen_count, success_count, almost_count, fail_count,
       level, status, review_history, updated_at
     ) VALUES (?, ?, ?, datetime('now'), 0, 2.35, 1, datetime('now'), 1, 0, ?, ?, 1, 'learning', ?, datetime('now'))
-    ON CONFLICT(id) DO UPDATE SET
-      prochaine_revision = datetime('now'),
-      almost_count = almost_count + ?,
-      fail_count = fail_count + ?,
-      seen_count = seen_count + 1,
-      status = 'learning',
-      review_history = ?,
-      updated_at = datetime('now')
   `).bind(
     progressId,
     params.profileId,
     wordId,
     params.attempt.result === 'almost' ? 1 : 0,
     params.attempt.result === 'wrong' ? 1 : 0,
-    JSON.stringify([{
-      date: now,
-      result: 'assim_exercise_weak',
-      aiFeedback: `${params.lessonCode} · ${params.attempt.exerciseType}: ${params.attempt.focus || params.attempt.hintFr || 'phrase a consolider'}`,
-    }]),
-    params.attempt.result === 'almost' ? 1 : 0,
-    params.attempt.result === 'wrong' ? 1 : 0,
-    JSON.stringify([{
-      date: now,
-      result: 'assim_exercise_weak',
-      aiFeedback: `${params.lessonCode} · ${params.attempt.exerciseType}: ${params.attempt.focus || params.attempt.hintFr || 'phrase a consolider'}`,
-    }]),
+    JSON.stringify([weakEntry]),
   ).run();
 
   return {
-    created: (insertWord.meta?.changes ?? 0) > 0,
+    created: insertChanges > 0,
     promoted: true,
     wordId,
   };
@@ -167,12 +224,16 @@ export async function handleAssimilExerciseSession(
   const artifact = row?.lesson_json
     ? safeJsonParse<AssimilLessonArtifact | null>(row.lesson_json, null)
     : null;
-  const weakAttempts = body.attempts.filter(shouldRecycleAttempt);
+  // Recyclage qualitatif : les tentatives faibles sont triées par sévérité puis
+  // limitées aux unités de plus forte valeur (2-3 max).
+  const weakAttempts = body.attempts
+    .filter(shouldRecycleAttempt)
+    .sort((a, b) => attemptSeverity(b) - attemptSeverity(a));
   let created = 0;
   let promoted = 0;
   const wordIds: string[] = [];
 
-  for (const attempt of weakAttempts.slice(0, 8)) {
+  for (const attempt of weakAttempts.slice(0, RECYCLE_CAP)) {
     const result = await promoteWeakAttempt({
       artifact,
       attempt,
@@ -186,7 +247,10 @@ export async function handleAssimilExerciseSession(
     if (result.wordId) wordIds.push(result.wordId);
   }
 
-  const score = body.total > 0 ? Math.max(0, Math.min(1, body.score / body.total)) : 0;
+  // Pas de score pour le shadowing auto-validé : il gonflerait la moyenne orale.
+  const score = body.exerciseType === 'shadowing'
+    ? null
+    : body.total > 0 ? Math.max(0, Math.min(1, body.score / body.total)) : 0;
   const contentId = `${base.code}:${body.exerciseId}`;
   const payload = {
     lessonCode: base.code,

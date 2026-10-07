@@ -1,7 +1,9 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
+import { parseDbDate } from './srs';
 import {
   AssimilGenerationError,
+  type AssimilGenerationProvider,
   generateAssimilArtifact,
   translateLinesToFrench,
 } from './assimilGeneration';
@@ -42,13 +44,23 @@ import {
 import {
   getAssimilLessonRow,
   hasGeneratedArtifact,
+  listAssimilGeneratedArtifactsByProviderPrefix,
+  resetAssimilGeneratedArtifactsByProviderPrefix,
   upsertAssimilLesson,
   withGenerationStatus,
 } from './assimilStore';
 
 type ArtifactResult =
-  | { ok: true; artifact: Awaited<ReturnType<typeof generateAssimilArtifact>> }
+  | {
+      ok: true;
+      artifact: Awaited<ReturnType<typeof generateAssimilArtifact>>;
+      generatedBy: string;
+      model?: string;
+      provider: AssimilGenerationProvider;
+    }
   | { ok: false; response: Response };
+
+const DEFAULT_PEDAGOGY_PROVIDER: AssimilGenerationProvider = 'gemini';
 
 async function withAvailability(env: Env, lessons: ReturnType<typeof formatLesson>[]) {
   return Promise.all(
@@ -77,16 +89,23 @@ async function generateArtifactResponse(
   index: number,
   level: AssimilLevel,
   transcript: string,
+  provider: AssimilGenerationProvider = DEFAULT_PEDAGOGY_PROVIDER,
+  model?: string,
 ): Promise<ArtifactResult> {
   try {
-    const artifact = await generateAssimilArtifact(env, index, level, transcript);
-    return { ok: true, artifact };
+    const artifact = await generateAssimilArtifact(env, index, level, transcript, { model, provider });
+    return { ok: true, artifact, generatedBy: generatedBy(provider, model), model, provider };
   } catch (error) {
     const message = error instanceof AssimilGenerationError
       ? error.message
       : 'Génération LLM impossible';
     return { ok: false, response: err(message, 502) };
   }
+}
+
+function generatedBy(provider: AssimilGenerationProvider, model?: string): string {
+  if (provider === 'gemini') return model ?? 'gemini-3.5-flash';
+  return 'deepseek-v4-flash';
 }
 
 export async function handleAssimilLessons(req: Request, env: Env): Promise<Response> {
@@ -136,6 +155,7 @@ export async function handleGetAssimilLesson(_req: Request, env: Env, rawIndex: 
 interface RecycleAssimilRequest {
   limit?: number;
   profileId: string;
+  terms?: string[];
 }
 
 function slugForId(value: string): string {
@@ -182,13 +202,26 @@ export async function handleRecycleAssimilLesson(req: Request, env: Env, rawInde
   if (!artifact?.recyclingTargets?.length) return json({ ok: true, promoted: 0, created: 0, skipped: 0 });
 
   const base = formatLesson(index);
-  const limit = Math.min(Math.max(Number(body.limit ?? 8), 1), 12);
+  // Politique de recyclage : 2 à 3 nouvelles unités par leçon maximum. Le
+  // recyclage manuel peut monter plus haut, mais reste explicitement demandé.
+  const limit = Math.min(Math.max(Number(body.limit ?? 3), 1), 12);
+
+  // Sélection explicite côté mobile (l'utilisateur peut désélectionner des
+  // cibles) : les terms fournis priment sur la limite.
+  const requestedTerms = Array.isArray(body.terms)
+    ? body.terms.map((term) => normalizeRecycleTerm(term)).filter(Boolean)
+    : null;
+
+  const targets = requestedTerms?.length
+    ? artifact.recyclingTargets.filter((target) => requestedTerms.includes(normalizeRecycleTerm(target.term ?? '')))
+    : artifact.recyclingTargets.slice(0, limit);
+
   const seen = new Set<string>();
   let promoted = 0;
   let created = 0;
   let skipped = 0;
 
-  for (const target of artifact.recyclingTargets.slice(0, limit)) {
+  for (const target of targets) {
     const term = normalizeRecycleTerm(target.term ?? '');
     const key = term.toLowerCase();
     if (!term || seen.has(key)) {
@@ -220,25 +253,53 @@ export async function handleRecycleAssimilLesson(req: Request, env: Env, rawInde
     }
 
     const progressId = `${body.profileId}_${wordId}`;
+    const existingProgress = await env.DB.prepare(
+      'SELECT prochaine_revision, review_history FROM word_progress WHERE id = ?',
+    ).bind(progressId).first<{ prochaine_revision: string; review_history: string }>();
+
+    const recycleEntry = {
+      date: new Date().toISOString(),
+      result: 'assim_recycled',
+      aiFeedback: `Recyclé depuis ${base.code}: ${artifact.titleEn || artifact.titleFr || base.title}`,
+    };
+
+    if (existingProgress) {
+      // Une unité déjà programmée n'est pas remise à due-now : due demain au
+      // plus tôt, jamais reculée. L'historique existant est complété, pas écrasé.
+      let history: unknown[] = [];
+      try { history = JSON.parse(existingProgress.review_history || '[]'); } catch { /* keep empty */ }
+      const nextHistory = [...(Array.isArray(history) ? history : []), recycleEntry].slice(-20);
+
+      const candidateMs = Date.now() + 1 * 86400000;
+      const existingMs = parseDbDate(existingProgress.prochaine_revision);
+      const prochaine = existingMs !== null && existingMs < candidateMs
+        ? existingProgress.prochaine_revision
+        : new Date(candidateMs).toISOString();
+
+      await env.DB.prepare(`
+        UPDATE word_progress SET
+          prochaine_revision = ?,
+          seen_count = seen_count + 1,
+          status = 'learning',
+          review_history = ?,
+          updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(prochaine, JSON.stringify(nextHistory), progressId).run();
+      promoted += 1;
+      continue;
+    }
+
     await env.DB.prepare(`
       INSERT INTO word_progress (
         id, profile_id, word_id, prochaine_revision, intervalle, facilite, repetitions,
         derniere_revision, seen_count, success_count, almost_count, fail_count,
         level, status, review_history, updated_at
       ) VALUES (?, ?, ?, datetime('now'), 0, 2.5, 1, datetime('now'), 1, 0, 0, 0, 1, 'learning', ?, datetime('now'))
-      ON CONFLICT(id) DO UPDATE SET
-        prochaine_revision = datetime('now'),
-        status = 'learning',
-        updated_at = datetime('now')
     `).bind(
       progressId,
       body.profileId,
       wordId,
-      JSON.stringify([{
-        date: new Date().toISOString(),
-        result: 'assim_recycled',
-        aiFeedback: `Recyclé depuis ${base.code}: ${artifact.titleEn || artifact.titleFr || base.title}`,
-      }]),
+      JSON.stringify([recycleEntry]),
     ).run();
     promoted += 1;
   }
@@ -334,7 +395,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
         transcript: existing.transcript,
         transcriptSource: existing.transcript_source,
         artifact,
-        generatedBy: 'deepseek-v4-flash',
+        generatedBy: artifactResult.generatedBy,
       });
 
       const row = await getAssimilLessonRow(env, index);
@@ -557,7 +618,7 @@ export async function handleTranscribeAssimilLesson(req: Request, env: Env, rawI
         transcriptionStatus: null,
         audioAnalysis,
         artifact,
-        generatedBy: 'deepseek-v4-flash',
+        generatedBy: artifactResult.generatedBy,
       });
     }
   }
@@ -656,7 +717,12 @@ export async function handleGenerateAssimilLesson(req: Request, env: Env, rawInd
   const index = parseLessonIndex(rawIndex);
   if (index === null) return err('lesson index invalide', 400);
 
-  const body = await req.json<{ transcript?: string; force?: boolean }>().catch(() => null);
+  const body = await req.json<{
+    force?: boolean;
+    model?: string;
+    provider?: AssimilGenerationProvider;
+    transcript?: string;
+  }>().catch(() => null);
   const existing = await getAssimilLessonRow(env, index);
 
   if (!body?.force && hasGeneratedArtifact(existing)) {
@@ -669,7 +735,8 @@ export async function handleGenerateAssimilLesson(req: Request, env: Env, rawInd
   }
 
   const base = formatLesson(index);
-  const artifactResult = await generateArtifactResponse(env, index, base.level, transcript);
+  const provider = body?.provider === 'deepseek' ? 'deepseek' : DEFAULT_PEDAGOGY_PROVIDER;
+  const artifactResult = await generateArtifactResponse(env, index, base.level, transcript, provider, body?.model);
   if (!artifactResult.ok) return artifactResult.response;
   const { artifact } = artifactResult;
 
@@ -680,9 +747,151 @@ export async function handleGenerateAssimilLesson(req: Request, env: Env, rawInd
     transcript,
     transcriptSource: existing?.transcript_source ?? (body?.transcript ? 'request' : null),
     artifact,
-    generatedBy: 'deepseek-v4-flash',
+    generatedBy: artifactResult.generatedBy,
   });
 
   const row = await getAssimilLessonRow(env, index);
   return json({ ok: true, cached: false, lesson: rowToLesson(row, index) });
+}
+
+export async function handleResetAssimilGeneratedArtifacts(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  type ResetArtifactsBody = {
+    dryRun?: boolean;
+    generatedByPrefix?: string;
+  };
+  const body = await req.json<ResetArtifactsBody>().catch((): ResetArtifactsBody => ({}));
+  const generatedByPrefix = body.generatedByPrefix?.trim() || 'deepseek';
+  const dryRun = body.dryRun !== false;
+  const before = await listAssimilGeneratedArtifactsByProviderPrefix(env, generatedByPrefix);
+
+  if (!dryRun) {
+    await resetAssimilGeneratedArtifactsByProviderPrefix(env, generatedByPrefix);
+  }
+
+  const after = dryRun
+    ? before
+    : await listAssimilGeneratedArtifactsByProviderPrefix(env, generatedByPrefix);
+
+  return json({
+    dryRun,
+    generatedByPrefix,
+    ok: true,
+    resetCount: dryRun ? 0 : Math.max(0, before.length - after.length),
+    targetCount: before.length,
+    targets: before.slice(0, 50),
+  });
+}
+
+function artifactSummary(artifact: AssimilLessonArtifact) {
+  return {
+    exerciseCount: artifact.exercises?.length ?? 0,
+    noteCount: artifact.notes?.length ?? 0,
+    objectiveCount: artifact.objectives?.length ?? 0,
+    recyclingTargetCount: artifact.recyclingTargets?.length ?? 0,
+    sentenceCount: artifact.sentences?.length ?? 0,
+    titleEn: artifact.titleEn,
+    titleFr: artifact.titleFr,
+  };
+}
+
+async function runGenerationCandidate(params: {
+  env: Env;
+  index: number;
+  level: AssimilLevel;
+  model?: string;
+  provider: AssimilGenerationProvider;
+  transcript: string;
+}) {
+  const startedAt = Date.now();
+  try {
+    const artifact = await generateAssimilArtifact(
+      params.env,
+      params.index,
+      params.level,
+      params.transcript,
+      { model: params.model, provider: params.provider },
+    );
+
+    return {
+      artifact,
+      durationMs: Date.now() - startedAt,
+      generatedBy: generatedBy(params.provider, params.model),
+      ok: true,
+      provider: params.provider,
+      summary: artifactSummary(artifact),
+    };
+  } catch (error) {
+    return {
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : 'generation_failed',
+      generatedBy: generatedBy(params.provider, params.model),
+      ok: false,
+      provider: params.provider,
+    };
+  }
+}
+
+export async function handleCompareAssimilGeneration(req: Request, env: Env, rawIndex: string): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const index = parseLessonIndex(rawIndex);
+  if (index === null) return err('lesson index invalide', 400);
+
+  const body = await req.json<{
+    geminiModel?: string;
+    includeArtifacts?: boolean;
+    providers?: AssimilGenerationProvider[];
+  }>().catch(() => null);
+  const existing = await getAssimilLessonRow(env, index);
+  const transcript = existing?.transcript?.trim();
+
+  if (!transcript || transcript.length < 20) {
+    return err('Transcript requis avant comparaison pédagogique', 428);
+  }
+
+  const base = formatLesson(index);
+  const defaultProviders: AssimilGenerationProvider[] = ['deepseek', 'gemini'];
+  const requestedProviders = body?.providers?.length
+    ? body.providers.filter((provider): provider is AssimilGenerationProvider =>
+      provider === 'deepseek' || provider === 'gemini')
+    : defaultProviders;
+  const providers: AssimilGenerationProvider[] = requestedProviders.length
+    ? Array.from(new Set(requestedProviders))
+    : defaultProviders;
+
+  const results = await Promise.all(providers.map((provider) =>
+    runGenerationCandidate({
+      env,
+      index,
+      level: base.level,
+      model: provider === 'gemini' ? body?.geminiModel : undefined,
+      provider,
+      transcript,
+    })));
+
+  return json({
+    includeArtifacts: body?.includeArtifacts === true,
+    lesson: {
+      code: base.code,
+      index,
+      level: base.level,
+      transcriptSource: existing?.transcript_source ?? null,
+      transcriptLength: transcript.length,
+    },
+    ok: true,
+    results: body?.includeArtifacts === true
+      ? results
+      : results.map((result) => {
+        if (!result.ok) return result;
+        return {
+          durationMs: result.durationMs,
+          generatedBy: result.generatedBy,
+          ok: result.ok,
+          provider: result.provider,
+          summary: result.summary,
+        };
+      }),
+  });
 }

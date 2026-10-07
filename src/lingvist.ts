@@ -16,7 +16,8 @@ interface CardRow {
   example_en: string; lemma: string; target_pos: string;
   verb_form_label: string | null; expected_answer: string;
   sentence_with_gap: string; sentence_full: string;
-  translation_fr: string; grammar_hint: string;
+  translation_fr: string; word_traduction_fr: string | null;
+  grammar_hint: string;
   input_placeholder: string; source: string; schema_version: number;
 }
 
@@ -48,7 +49,8 @@ export async function handleUpsertLingvistCard(req: Request, env: Env, wordId: s
   const body = await req.json<{
     profileId: string; exampleEn: string; lemma: string; targetPos?: string;
     verbFormLabel?: string; expectedAnswer: string; sentenceWithGap: string;
-    sentenceFull: string; translationFr: string; grammarHint: string;
+    sentenceFull: string; translationFr: string; wordTraductionFr?: string;
+    grammarHint: string;
     inputPlaceholder: string; source?: string; schemaVersion?: number;
   }>().catch(() => null);
 
@@ -60,13 +62,14 @@ export async function handleUpsertLingvistCard(req: Request, env: Env, wordId: s
     INSERT INTO lingvist_cards (
       id, profile_id, word_id, example_en, lemma, target_pos, verb_form_label,
       expected_answer, sentence_with_gap, sentence_full, translation_fr,
-      grammar_hint, input_placeholder, source, schema_version, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      word_traduction_fr, grammar_hint, input_placeholder, source, schema_version, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       example_en=excluded.example_en, lemma=excluded.lemma,
       target_pos=excluded.target_pos, verb_form_label=excluded.verb_form_label,
       expected_answer=excluded.expected_answer, sentence_with_gap=excluded.sentence_with_gap,
       sentence_full=excluded.sentence_full, translation_fr=excluded.translation_fr,
+      word_traduction_fr=excluded.word_traduction_fr,
       grammar_hint=excluded.grammar_hint, input_placeholder=excluded.input_placeholder,
       source=excluded.source, schema_version=excluded.schema_version,
       updated_at=datetime('now')
@@ -74,7 +77,8 @@ export async function handleUpsertLingvistCard(req: Request, env: Env, wordId: s
     id, body.profileId, wordId, body.exampleEn, body.lemma,
     body.targetPos ?? 'other', body.verbFormLabel ?? null,
     body.expectedAnswer, body.sentenceWithGap, body.sentenceFull,
-    body.translationFr, body.grammarHint, body.inputPlaceholder,
+    body.translationFr, body.wordTraductionFr ?? null,
+    body.grammarHint, body.inputPlaceholder,
     body.source ?? 'remote', body.schemaVersion ?? 4,
   ).run();
 
@@ -128,6 +132,7 @@ function deserializeCard(row: CardRow) {
     sentenceWithGap: row.sentence_with_gap,
     sentenceFull: row.sentence_full,
     translationFr: row.translation_fr,
+    wordTraductionFr: row.word_traduction_fr ?? '',
     grammarHint: row.grammar_hint,
     inputPlaceholder: row.input_placeholder,
     source: row.source,

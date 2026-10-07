@@ -1,6 +1,12 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
 import { formatLesson, safeJsonParse, type AssimilLessonRow } from './assimilModel';
+import {
+  DUE_WORD_LEVEL_FILTER_SQL,
+  NEW_WORD_LEVEL_FILTER_SQL,
+  loadLevelFloorRank,
+  rankNewWordsByPriority,
+} from './srs';
 
 const SCHEMA_VERSION = 4;
 
@@ -66,6 +72,7 @@ interface CardRow {
   sentence_with_gap: string;
   sentence_full: string;
   translation_fr: string;
+  word_traduction_fr: string | null;
   grammar_hint: string;
   input_placeholder: string;
   source: string;
@@ -82,6 +89,7 @@ interface PreparedCard {
   sentenceWithGap: string;
   sentenceFull: string;
   translationFr: string;
+  wordTraductionFr?: string;
   grammarHint: string;
   inputPlaceholder: string;
   source: 'remote' | 'local';
@@ -353,6 +361,7 @@ function buildLocalPreparedCard(word: PreparedWord): PreparedCard {
     sentenceWithGap: buildGap(sentenceFull, answer),
     sentenceFull,
     translationFr,
+    wordTraductionFr: cleanText(word.traduction) || '',
     grammarHint: buildSafeGrammarHint(word, targetPos, targetPos === 'verb' ? inferVerbLabel(sentenceFull, answer) : null),
     inputPlaceholder: targetPos === 'verb' ? 'Ecris la bonne forme verbale' : 'Ecris le mot manquant',
     source: 'local',
@@ -578,6 +587,7 @@ function serializeCard(row: CardRow): PreparedCard {
     sentenceWithGap: row.sentence_with_gap,
     sentenceFull: row.sentence_full,
     translationFr: row.translation_fr,
+    wordTraductionFr: row.word_traduction_fr ?? '',
     grammarHint: row.grammar_hint,
     inputPlaceholder: row.input_placeholder,
     source: row.source === 'remote' ? 'remote' : 'local',
@@ -693,13 +703,14 @@ function upsertCardStatement(env: Env, profileId: string, card: PreparedCard): D
     INSERT INTO lingvist_cards (
       id, profile_id, word_id, example_en, lemma, target_pos, verb_form_label,
       expected_answer, sentence_with_gap, sentence_full, translation_fr,
-      grammar_hint, input_placeholder, source, schema_version, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      word_traduction_fr, grammar_hint, input_placeholder, source, schema_version, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       example_en=excluded.example_en, lemma=excluded.lemma,
       target_pos=excluded.target_pos, verb_form_label=excluded.verb_form_label,
       expected_answer=excluded.expected_answer, sentence_with_gap=excluded.sentence_with_gap,
       sentence_full=excluded.sentence_full, translation_fr=excluded.translation_fr,
+      word_traduction_fr=excluded.word_traduction_fr,
       grammar_hint=excluded.grammar_hint, input_placeholder=excluded.input_placeholder,
       source=excluded.source, schema_version=excluded.schema_version,
       updated_at=datetime('now')
@@ -715,6 +726,7 @@ function upsertCardStatement(env: Env, profileId: string, card: PreparedCard): D
     card.sentenceWithGap,
     card.sentenceFull,
     card.translationFr,
+    card.wordTraductionFr ?? null,
     card.grammarHint,
     card.inputPlaceholder,
     card.source,
@@ -725,6 +737,7 @@ function upsertCardStatement(env: Env, profileId: string, card: PreparedCard): D
 async function loadSessionWords(env: Env, profileId: string, limit: number): Promise<PreparedWord[]> {
   const weaknessSignals = await loadRecentWeaknessSignals(env, profileId);
   const candidateLimit = Math.min(Math.max(limit * 5, 80), 160);
+  const levelFloor = await loadLevelFloorRank(env, profileId);
   const dueResult = await env.DB.prepare(`
     SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD},
       wp.prochaine_revision, wp.intervalle, wp.facilite, wp.repetitions,
@@ -733,31 +746,36 @@ async function loadSessionWords(env: Env, profileId: string, limit: number): Pro
     FROM words w
     INNER JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
     WHERE wp.repetitions > 0 AND wp.prochaine_revision <= datetime('now')
+      AND ${DUE_WORD_LEVEL_FILTER_SQL}
     ORDER BY
       CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
       wp.prochaine_revision ASC
     LIMIT ?
-  `).bind(profileId, candidateLimit).all<SessionWordRow>();
+  `).bind(profileId, levelFloor, candidateLimit).all<SessionWordRow>();
 
   const dueWords = orderWordsForWeakness(dueResult.results.map(hydrateExistingWord), weaknessSignals, limit);
   const newLimit = Math.max(0, limit - dueWords.length);
   if (newLimit <= 0) return dueWords;
 
-  const newCandidateLimit = weaknessSignals.length ? Math.min(newLimit * 3, 160) : newLimit;
+  const newCandidateLimit = Math.min(newLimit * 3, 160);
   const newResult = await env.DB.prepare(`
     SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD}
     FROM words w
     LEFT JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
     WHERE wp.id IS NULL
+      AND ${NEW_WORD_LEVEL_FILTER_SQL}
     ORDER BY
       CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
       w.frequence DESC,
       w.niveau ASC
     LIMIT ?
-  `).bind(profileId, newCandidateLimit).all<WordRow>();
+  `).bind(profileId, levelFloor, newCandidateLimit).all<WordRow>();
 
   const now = new Date().toISOString();
-  const newWords = orderWordsForWeakness(newResult.results.map((word) => hydrateNewWord(word, now)), weaknessSignals, newLimit);
+  // Dépriorisation des A1 probablement acquis : le pool est d'abord trié par
+  // priorité d'apprentissage (score explicable), puis par faiblesses détectées.
+  const priorityPool = rankNewWordsByPriority(newResult.results, Math.min(newLimit * 2, 120));
+  const newWords = orderWordsForWeakness(priorityPool.map((word) => hydrateNewWord(word, now)), weaknessSignals, newLimit);
   return [...dueWords, ...newWords];
 }
 

@@ -18,6 +18,48 @@ export async function getAssimilLessonRow(env: Env, index: number): Promise<Assi
   }
 }
 
+export async function listAssimilGeneratedArtifactsByProviderPrefix(
+  env: Env,
+  providerPrefix: string,
+): Promise<Array<{ generated_by: string | null; lesson_index: number; status: string; title_en: string | null; title_fr: string | null }>> {
+  const { results } = await env.DB.prepare(
+    `SELECT lesson_index, status, title_en, title_fr, generated_by
+     FROM assimil_lessons
+     WHERE generated_by LIKE ?
+       AND COALESCE(NULLIF(lesson_json, '{}'), '') <> ''
+     ORDER BY lesson_index`,
+  ).bind(`${providerPrefix}%`).all<{
+    generated_by: string | null;
+    lesson_index: number;
+    status: string;
+    title_en: string | null;
+    title_fr: string | null;
+  }>();
+
+  return results;
+}
+
+export async function resetAssimilGeneratedArtifactsByProviderPrefix(
+  env: Env,
+  providerPrefix: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE assimil_lessons
+     SET
+       status = CASE
+         WHEN COALESCE(NULLIF(transcript, ''), '') <> '' THEN 'transcript_ready'
+         ELSE 'audio_ready'
+       END,
+       title_en = NULL,
+       title_fr = NULL,
+       lesson_json = '{}',
+       generated_by = NULL,
+       updated_at = datetime('now')
+     WHERE generated_by LIKE ?
+       AND COALESCE(NULLIF(lesson_json, '{}'), '') <> ''`,
+  ).bind(`${providerPrefix}%`).run();
+}
+
 export async function upsertAssimilLesson(
   env: Env,
   index: number,

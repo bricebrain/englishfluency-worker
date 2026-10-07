@@ -2,7 +2,7 @@ import type { Env } from './types';
 import { json, err } from './utils';
 import { handleProxy } from './proxy';
 import { handleGetProfile, handleCreateProfile, handleListProfiles, handleDeleteProfile } from './profile';
-import { handleGetSrsProgress, handleSrsReview, handleSrsPromote, handleSrsStats, handleSrsSession, handleSrsCalibrate } from './srs';
+import { handleGetSrsProgress, handleSrsReview, handleSrsPromote, handleSrsStats, handleSrsSession, handleSrsCalibrate, handleSrsKnown, handleSrsTriage } from './srs';
 import { handleGetContent, handleCreateContent, handleDeleteContent, handlePatchContent } from './content';
 import { handleGetDictation, handleSaveDictation } from './dictation';
 import {
@@ -22,7 +22,7 @@ import { handleQrGenerate, handleQrAnalyze } from './qr';
 import { handleSpeakAnalyze } from './speak';
 import { handlePromoteSpeakFeedback } from './speakRecycle';
 import { handlePromotePodcastWords } from './podcastRecycle';
-import { handleGetDailyPodcast, handleGeneratePodcast, generateAndStoreDailyPodcast } from './podcast';
+import { handleGetDailyPodcast, handleGeneratePodcast } from './podcast';
 import {
   handleGetChannelLesson,
   handleListChannels,
@@ -36,18 +36,75 @@ import {
   handleAssimilRunPodHealth,
   handleAssimilLessons,
   handleAssimilTranscriptionStatus,
+  handleCompareAssimilGeneration,
   handleGenerateAssimilLesson,
   handleGetAssimilLesson,
   handleRecycleAssimilLesson,
+  handleResetAssimilGeneratedArtifacts,
   handleTranscribeAssimilLesson,
   handleUpsertAssimilTranscript,
 } from './assimil';
 import { handleAssimilExerciseSession } from './assimilExerciseSession';
+import {
+  handleAssimilPreparationStatus,
+  handleAssimilPrepareNext,
+  prepareNextAssimilLessons,
+} from './assimilPreparation';
+import {
+  handleListPodcastFeeds,
+  handleCreatePodcastFeed,
+  handlePatchPodcastFeed,
+  handleDeletePodcastFeed,
+  handleRefreshPodcastFeeds,
+  handleListEpisodes,
+  handleGetEpisode,
+  handleTranscribeEpisode,
+  handleEpisodeTranscriptionStatus,
+  handleGenerateEpisodeLesson,
+  handleGetEpisodeLesson,
+  handleRecommendEpisodes,
+} from './podcastFeeds';
+import {
+  handleImportSrtFolder,
+  handleListSrtEpisodes,
+  handleListSrtR2Objects,
+  handleListSrtScenes,
+  handleListSrtSources,
+} from './srtLibrary';
+import {
+  handleGetReadingLibrarySegments,
+  handleListReadingLibraryItems,
+  handlePrepareNextReadingItems,
+  prepareNextReadingItems,
+} from './readingLibrary';
 
 export default {
-  // ── Cron — podcast du jour (7h / 12h / 18h UTC) ─────────────────────────
-  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    await generateAndStoreDailyPodcast(env, 'B1').catch(() => {/* silently fail */});
+  // ── Cron — préparation Assimil progressive ─────────────────────────────
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil((async () => {
+      try {
+        const result = await prepareNextAssimilLessons(env, { limit: 3, provider: 'auto' });
+        const readingResult = await prepareNextReadingItems(env, 3, { maxAgeDays: 5 });
+        console.log(JSON.stringify({
+          cron: event.cron,
+          done: result.done,
+          processed: result.processed.map((item) => ({
+            index: item.index,
+            ok: item.ok,
+            status: item.status,
+          })),
+          selected: result.selected,
+          stats: result.stats,
+          readingPrepared: readingResult.selected,
+          task: 'assimil_prepare_next',
+        }));
+      } catch (error) {
+        console.error(JSON.stringify({
+          error: error instanceof Error ? error.message : 'unknown',
+          task: 'assimil_prepare_next',
+        }));
+      }
+    })());
   },
 
   async fetch(req: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
@@ -92,6 +149,11 @@ export default {
     if (method === 'GET' && path === '/assimil/lessons') return handleAssimilLessons(req, env);
     if (method === 'GET' && path === '/assimil/runpod/status') return handleAssimilRunPodStatus(req, env);
     if (method === 'POST' && path === '/assimil/runpod/health') return handleAssimilRunPodHealth(req, env);
+    if (method === 'GET' && path === '/assimil/preparation/status') return handleAssimilPreparationStatus(req, env);
+    if (method === 'POST' && path === '/assimil/prepare-next') return handleAssimilPrepareNext(req, env);
+    if (method === 'POST' && path === '/assimil/artifacts/reset-generated') {
+      return handleResetAssimilGeneratedArtifacts(req, env);
+    }
     if (method === 'GET' && path.match(/^\/assimil\/lesson\/\d+$/)) {
       return handleGetAssimilLesson(req, env, path.split('/')[3]);
     }
@@ -106,6 +168,9 @@ export default {
     }
     if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/generate$/)) {
       return handleGenerateAssimilLesson(req, env, path.split('/')[3]);
+    }
+    if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/generation-test$/)) {
+      return handleCompareAssimilGeneration(req, env, path.split('/')[3]);
     }
     if (method === 'POST' && path.match(/^\/assimil\/lesson\/\d+\/recycle$/)) {
       return handleRecycleAssimilLesson(req, env, path.split('/')[3]);
@@ -127,6 +192,8 @@ export default {
     if (method === 'GET'  && path === '/srs/stats')     return handleSrsStats(req, env);
     if (method === 'POST' && path === '/srs/review')    return handleSrsReview(req, env);
     if (method === 'POST' && path === '/srs/calibrate') return handleSrsCalibrate(req, env);
+    if (method === 'POST' && path === '/srs/known')     return handleSrsKnown(req, env);
+    if (method === 'GET'  && path === '/srs/triage')    return handleSrsTriage(req, env);
 
     // ── Mémoire pédagogique ──────────────────────────────────────────────
     if (method === 'GET'  && path === '/learning/mission') return handleGetDailyMission(req, env);
@@ -189,6 +256,49 @@ export default {
     if (method === 'POST' && path === '/speak/analyze') return handleSpeakAnalyze(req, env);
     if (method === 'POST' && path === '/speak/promote-feedback') return handlePromoteSpeakFeedback(req, env);
     if (method === 'GET' && path === '/articles') return handleGetReadingSources(req);
+
+    // ── Lire V2 — sources premium préparées ───────────────────────────────
+    if (method === 'GET' && path === '/reading-library/items') return handleListReadingLibraryItems(req, env);
+    if (method === 'POST' && path === '/reading-library/prepare-next') return handlePrepareNextReadingItems(req, env);
+    if (method === 'GET' && path.match(/^\/reading-library\/items\/[^/]+\/segments$/)) {
+      return handleGetReadingLibrarySegments(req, env, path.split('/')[3]);
+    }
+
+    // ── Podcast feeds → transcripts Deepgram → reading lessons ──────────────
+    // Voir PODCAST_FEEDS_SPEC.md pour le contrat complet.
+    if (method === 'GET'  && path === '/podcast-feeds')                return handleListPodcastFeeds(req, env);
+    if (method === 'POST' && path === '/podcast-feeds')                return handleCreatePodcastFeed(req, env);
+    if (method === 'POST' && path === '/podcast-feeds/refresh')        return handleRefreshPodcastFeeds(req, env);
+    if (method === 'GET'  && path === '/podcast-feeds/recommend')      return handleRecommendEpisodes(req, env);
+    if (method === 'PATCH'  && path.match(/^\/podcast-feeds\/[^/]+$/))         return handlePatchPodcastFeed(req, env, path.split('/')[2]);
+    if (method === 'DELETE' && path.match(/^\/podcast-feeds\/[^/]+$/))         return handleDeletePodcastFeed(req, env, path.split('/')[2]);
+    if (method === 'GET'  && path.match(/^\/podcast-feeds\/[^/]+\/episodes$/)) return handleListEpisodes(req, env, path.split('/')[2]);
+    if (method === 'GET'  && path.match(/^\/podcast-feeds\/episodes\/[^/]+\/lesson$/)) {
+      return handleGetEpisodeLesson(req, env, path.split('/')[3]);
+    }
+    if (method === 'GET'  && path.match(/^\/podcast-feeds\/episodes\/[^/]+\/transcription-status$/)) {
+      return handleEpisodeTranscriptionStatus(req, env, path.split('/')[3]);
+    }
+    if (method === 'GET'  && path.match(/^\/podcast-feeds\/episodes\/[^/]+$/)) {
+      return handleGetEpisode(req, env, path.split('/')[3]);
+    }
+    if (method === 'POST' && path.match(/^\/podcast-feeds\/episodes\/[^/]+\/transcribe$/)) {
+      return handleTranscribeEpisode(req, env, path.split('/')[3]);
+    }
+    if (method === 'POST' && path.match(/^\/podcast-feeds\/episodes\/[^/]+\/lesson$/)) {
+      return handleGenerateEpisodeLesson(req, env, path.split('/')[3]);
+    }
+
+    // ── SRT personnel → scènes authentiques privées ───────────────────────
+    if (method === 'GET' && path === '/srt/sources') return handleListSrtSources(req, env);
+    if (method === 'GET' && path === '/srt/r2-objects') return handleListSrtR2Objects(req, env);
+    if (method === 'POST' && path === '/srt/import-folder') return handleImportSrtFolder(req, env);
+    if (method === 'GET' && path.match(/^\/srt\/sources\/[^/]+\/episodes$/)) {
+      return handleListSrtEpisodes(req, env, path.split('/')[3]);
+    }
+    if (method === 'GET' && path.match(/^\/srt\/episodes\/[^/]+\/scenes$/)) {
+      return handleListSrtScenes(req, env, path.split('/')[3]);
+    }
 
     // ── Vocabulary (existant) ─────────────────────────────────────────────
     if (method === 'GET' && path === '/words/count')        return handleGetCount(env);

@@ -19,7 +19,10 @@
     "RUNPOD_AI_ENDPOINT_ID": "ql54gjc8r659yr"
   },
 
-  // ── Cron — génération du podcast du jour (7h, 12h, 18h UTC)
+  // ── Cron — préparation Assimil progressive (no-op automatique quand tout est prêt)
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
 
   // ── Service Binding : accès direct au Worker TechPulse (même compte, zéro latence HTTP)
   "services": [

@@ -4,6 +4,8 @@
  * GET  /srs/stats?profileId=            — stats globales légères (streak, due count…)
  * POST /srs/review                      — enregistre une révision
  * POST /srs/calibrate                   — calibration CEFR server-side (remplace srs/promote)
+ * POST /srs/known                       — « Je connais déjà » : dépriorisation + vérification différée
+ * GET  /srs/triage?profileId=&limit=    — candidats A1 évidents pour la session de tri rapide
  * GET  /srs/progress?profileId=         — tous les mots (usage admin/debug uniquement)
  * POST /srs/promote                     — promotion en masse legacy (conservé pour compat)
  */
@@ -167,11 +169,15 @@ export async function handleSrsPromote(req: Request, env: Env): Promise<Response
 export async function handleSrsStats(req: Request, env: Env): Promise<Response> {
   const profileId = new URL(req.url).searchParams.get('profileId') ?? 'default';
   const today = new Date().toISOString().slice(0, 10);
+  const levelFloor = await loadLevelFloorRank(env, profileId);
 
   const [dueResult, learnedResult, totalResult, historyResult] = await Promise.all([
     env.DB.prepare(
-      `SELECT COUNT(*) as count FROM word_progress WHERE profile_id = ? AND repetitions > 0 AND prochaine_revision <= datetime('now')`
-    ).bind(profileId).first<{ count: number }>(),
+      `SELECT COUNT(*) as count FROM word_progress wp
+       INNER JOIN words w ON w.id = wp.word_id
+       WHERE wp.profile_id = ? AND wp.repetitions > 0 AND wp.prochaine_revision <= datetime('now')
+         AND ${DUE_WORD_LEVEL_FILTER_SQL}`
+    ).bind(profileId, levelFloor).first<{ count: number }>(),
     env.DB.prepare(
       `SELECT COUNT(*) as count FROM word_progress WHERE profile_id = ? AND repetitions > 0`
     ).bind(profileId).first<{ count: number }>(),
@@ -245,10 +251,78 @@ interface SessionWordRow extends WordRow {
   level: number; status: string; review_history: string;
 }
 
+// ─── Priorité d'apprentissage (A1 évidents) ──────────────────────────────────
+// Mots A1 « pièges » : simples en apparence mais complexes dans leurs usages.
+// Jamais dépriorisés automatiquement (VOCABULARY_LEARNING_EVOLUTION.md).
+const TRICKY_A1_WORDS = new Set(['as', 'like', 'get', 'set', 'still', 'just', 'yet', 'would', 'rather']);
+
+// ─── Plancher de niveau (profil) ─────────────────────────────────────────────
+// Le niveau choisi dans le profil remplace la calibration : les mots situés au
+// strictement sous (niveau − 1) ne sont plus proposés
+// comme nouveaux et ne reviennent en révision que s'ils ont déjà posé problème.
+// Toujours conservés : mots pièges, unités Assimil, mots triés « À apprendre ».
+const CEFR_ORDER = ['A1', 'A2', 'B1', 'B2', 'C1'];
+const NIVEAU_RANK_SQL = "CASE w.niveau WHEN 'A1' THEN 0 WHEN 'A2' THEN 1 WHEN 'B1' THEN 2 WHEN 'B2' THEN 3 ELSE 4 END";
+const TRICKY_SQL_LIST = [...TRICKY_A1_WORDS].map((word) => `'${word}'`).join(', ');
+
+export async function loadLevelFloorRank(env: Env, profileId: string): Promise<number> {
+  const row = await env.DB.prepare('SELECT level FROM profiles WHERE id = ?')
+    .bind(profileId).first<{ level: string }>();
+  const rank = CEFR_ORDER.indexOf((row?.level ?? 'B1').toUpperCase());
+  return Math.max(0, (rank === -1 ? 2 : rank) - 1);
+}
+
+/** Filtre SQL (1 paramètre : plancher) des nouveaux mots — alias `w`. */
+export const NEW_WORD_LEVEL_FILTER_SQL = `(
+  ${NIVEAU_RANK_SQL} >= ?
+  OR w.id LIKE 'assim_%'
+  OR LOWER(w.mot) IN (${TRICKY_SQL_LIST})
+)`;
+
+/** Filtre SQL (1 paramètre : plancher) des mots dus — alias `w` et `wp`. */
+export const DUE_WORD_LEVEL_FILTER_SQL = `NOT (
+  ${NIVEAU_RANK_SQL} < ?
+  AND wp.fail_count = 0
+  AND wp.almost_count = 0
+  AND w.id NOT LIKE 'assim_%'
+  AND LOWER(w.mot) NOT IN (${TRICKY_SQL_LIST})
+  AND wp.review_history NOT LIKE '%triage_focus%'
+)`;
+
+// Score explicable : 0 = probablement déjà acquis (dépriorisé), 1 = apprentissage prioritaire.
+// Ne déclare jamais un mot connu — sert uniquement à ordonner les nouveaux mots.
+export function computeLearningPriorityScore(word: {
+  mot: string; type: string | null; niveau: string; frequence?: number | null;
+  fail_count?: number | null;
+}): number {
+  let score = 1;
+  const mot = (word.mot ?? '').toLowerCase();
+  if (word.niveau === 'A1') score -= 0.3;
+  if ((word.frequence ?? 3) >= 5) score -= 0.15;
+  if (mot.length > 0 && mot.length <= 4) score -= 0.1;
+  if (word.type && ['determiner', 'pronoun', 'number', 'color', 'preposition'].includes(word.type)) score -= 0.1;
+  if ((word.fail_count ?? 0) > 0) score += 0.2;
+  if (TRICKY_A1_WORDS.has(mot)) score += 0.25;
+  return Math.max(0, Math.min(1, score));
+}
+
+export function rankNewWordsByPriority<T extends { mot: string; type: string | null; niveau: string; frequence?: number | null }>(
+  words: T[],
+  limit: number,
+): T[] {
+  if (words.length <= limit) return words;
+  return [...words]
+    .map((word, order) => ({ word, order, score: computeLearningPriorityScore(word) }))
+    .sort((a, b) => (b.score - a.score) || (a.order - b.order))
+    .slice(0, limit)
+    .map((entry) => entry.word);
+}
+
 export async function handleSrsSession(req: Request, env: Env): Promise<Response> {
   const params = new URL(req.url).searchParams;
   const profileId = params.get('profileId') ?? 'default';
   const limit = Math.min(parseInt(params.get('limit') ?? '100', 10), 200);
+  const levelFloor = await loadLevelFloorRank(env, profileId);
 
   const SELECT_WORD = `
     json_extract(w.examples, '$[0].en') AS exemple_en,
@@ -264,11 +338,12 @@ export async function handleSrsSession(req: Request, env: Env): Promise<Response
     FROM words w
     INNER JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
     WHERE wp.repetitions > 0 AND wp.prochaine_revision <= datetime('now')
+      AND ${DUE_WORD_LEVEL_FILTER_SQL}
     ORDER BY
       CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
       wp.prochaine_revision ASC
     LIMIT ?
-  `).bind(profileId, limit).all<SessionWordRow>();
+  `).bind(profileId, levelFloor, limit).all<SessionWordRow>();
 
   const dueWords = dueResult.results.map((w) => {
     let parsedExamples: { en: string; fr: string }[] = [];
@@ -279,24 +354,28 @@ export async function handleSrsSession(req: Request, env: Env): Promise<Response
   });
 
   // 2. Nouveaux mots pour compléter la session (jamais dans word_progress)
+  //    Pool élargi (×3) puis tri par priorité : les A1 probablement acquis
+  //    arrivent en fin de session au lieu d'être exclus automatiquement.
   const newLimit = Math.max(0, limit - dueWords.length);
   let newWords: ReturnType<typeof parseWordRow>[] = [];
 
   if (newLimit > 0) {
+    const candidateLimit = Math.min(newLimit * 3, 200);
     const newResult = await env.DB.prepare(`
       SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD}
       FROM words w
       LEFT JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
       WHERE wp.id IS NULL
+        AND ${NEW_WORD_LEVEL_FILTER_SQL}
       ORDER BY
         CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
         w.frequence DESC,
         w.niveau ASC
       LIMIT ?
-    `).bind(profileId, newLimit).all<WordRow>();
+    `).bind(profileId, levelFloor, candidateLimit).all<WordRow>();
 
     const now = new Date().toISOString();
-    newWords = newResult.results.map((w) => parseWordRow(w, undefined, now));
+    newWords = rankNewWordsByPriority(newResult.results, newLimit).map((w) => parseWordRow(w, undefined, now));
   }
 
   // 3. Historique de révision (60 jours) — léger
@@ -381,4 +460,218 @@ export async function handleSrsCalibrate(req: Request, env: Env): Promise<Respon
   }
 
   return json({ ok: true, promoted: eligibleResult.results.length });
+}
+
+// ─── POST /srs/known ─────────────────────────────────────────────────────────
+// « Je connais déjà » : déclaration utilisateur, en batch (session de tri ou carte).
+// Body: { profileId: string, wordIds: string[], source?: 'user_marked_known' | 'triage_focus' }
+//  - user_marked_known → dépriorisation : seen+1, success+1, vérification dans 7-15 j
+//  - triage_focus      → « À apprendre » : priorisation, due demain au plus tôt
+// Ne passe JAMAIS directement à status='known' : l'entrée review_history
+// 'user_marked_known' sert de métadonnée known_candidate, la promotion se fait
+// après au moins une vérification réussie (escalade gérée côté app dans reviewWord).
+
+interface KnownHistoryEntry {
+  date?: string;
+  result?: string;
+}
+
+function parseKnownHistory(raw: string | null | undefined): KnownHistoryEntry[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// prochaine_revision est stockée dans deux formats (ISO et datetime('now')) —
+// normalise avant comparaison.
+export function parseDbDate(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+// Jitter déterministe 7..15 jours par mot pour étaler les vérifications.
+function deferredVerificationDays(wordId: string): number {
+  let hash = 0;
+  for (let i = 0; i < wordId.length; i += 1) {
+    hash = (hash * 31 + wordId.charCodeAt(i)) & 0x7fffffff;
+  }
+  return 7 + (hash % 9);
+}
+
+export async function handleSrsKnown(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const body = await req.json<{
+    profileId: string;
+    wordIds: string[];
+    source?: 'user_marked_known' | 'triage_focus';
+  }>().catch(() => null);
+
+  if (!body?.profileId || !Array.isArray(body?.wordIds) || body.wordIds.length === 0) {
+    return err('profileId et wordIds requis');
+  }
+
+  const source = body.source === 'triage_focus' ? 'triage_focus' : 'user_marked_known';
+  const wordIds = [...new Set(
+    body.wordIds.filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )].slice(0, 100);
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  let updated = 0;
+  let alreadyMarked = 0;
+
+  for (const wordId of wordIds) {
+    const progressId = `${body.profileId}_${wordId}`;
+    const existing = await env.DB.prepare(
+      'SELECT * FROM word_progress WHERE id = ?',
+    ).bind(progressId).first<WordProgressRow>();
+
+    const history = parseKnownHistory(existing?.review_history);
+
+    // Anti double-marquage : un mot déjà déclaré connu n'est pas re-dépriorisé.
+    if (source === 'user_marked_known' && history.some((entry) => entry?.result === 'user_marked_known')) {
+      alreadyMarked += 1;
+      continue;
+    }
+
+    const nextHistory = [
+      ...history,
+      { date: nowIso, result: source === 'triage_focus' ? 'triage_focus' : 'user_marked_known' },
+    ].slice(-20);
+
+    if (!existing) {
+      const delayDays = source === 'triage_focus' ? 1 : deferredVerificationDays(wordId);
+      const prochaine = new Date(now.getTime() + delayDays * 86400000).toISOString();
+      await env.DB.prepare(`
+        INSERT INTO word_progress (
+          id, profile_id, word_id, prochaine_revision, intervalle, facilite, repetitions,
+          derniere_revision, seen_count, success_count, almost_count, fail_count,
+          level, status, review_history, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 2.5, 1, ?, ?, ?, 0, 0, ?, 'learning', ?, datetime('now'))
+        ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now')
+      `).bind(
+        progressId,
+        body.profileId,
+        wordId,
+        prochaine,
+        source === 'triage_focus' ? 0 : 7,
+        source === 'triage_focus' ? null : nowIso,
+        source === 'triage_focus' ? 0 : 1,
+        source === 'triage_focus' ? 0 : 1,
+        source === 'triage_focus' ? 0 : 1,
+        JSON.stringify(nextHistory),
+      ).run();
+      updated += 1;
+      continue;
+    }
+
+    if (source === 'triage_focus') {
+      // Priorisation : due demain, sans avancer une unité déjà due plus tôt.
+      const candidateMs = now.getTime() + 1 * 86400000;
+      const existingMs = parseDbDate(existing.prochaine_revision);
+      const prochaine = existingMs !== null && existingMs < candidateMs
+        ? existing.prochaine_revision
+        : new Date(candidateMs).toISOString();
+      await env.DB.prepare(`
+        UPDATE word_progress SET
+          prochaine_revision = ?,
+          repetitions = MAX(repetitions, 1),
+          status = 'learning',
+          review_history = ?,
+          updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(prochaine, JSON.stringify(nextHistory), progressId).run();
+      updated += 1;
+      continue;
+    }
+
+    // user_marked_known sur une unité existante : incrément léger + échéance
+    // différée, sans jamais régresser une échéance plus lointaine ni un statut known.
+    const candidateMs = now.getTime() + deferredVerificationDays(wordId) * 86400000;
+    const existingMs = parseDbDate(existing.prochaine_revision);
+    const prochaine = existingMs !== null && existingMs > candidateMs
+      ? existing.prochaine_revision
+      : new Date(candidateMs).toISOString();
+
+    await env.DB.prepare(`
+      UPDATE word_progress SET
+        prochaine_revision = ?,
+        derniere_revision = ?,
+        seen_count = seen_count + 1,
+        success_count = success_count + 1,
+        status = CASE WHEN status = 'known' THEN 'known' ELSE 'learning' END,
+        review_history = ?,
+        updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(prochaine, nowIso, JSON.stringify(nextHistory), progressId).run();
+    updated += 1;
+  }
+
+  // Journal unique des preuves : la déclaration est un événement, pas une maîtrise.
+  await env.DB.prepare(`
+    INSERT INTO learning_events (
+      id, profile_id, module, event_type, skill, content_id, payload, occurred_at
+    ) VALUES (?, ?, 'review', 'word_marked_known', 'vocabulary', ?, ?, ?)
+  `).bind(
+    `${body.profileId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    body.profileId,
+    wordIds[0] ?? null,
+    JSON.stringify({ source, wordIds, updated, alreadyMarked }),
+    nowIso,
+  ).run();
+
+  return json({ ok: true, updated, alreadyMarked });
+}
+
+// ─── GET /srs/triage?profileId=&limit= ───────────────────────────────────────
+// Candidats de la session de tri rapide : mots A1 très fréquents, jamais vus
+// (ou à peine), hors mots pièges et hors mots déjà marqués/connus.
+// Un score faible ne déclare pas un mot connu — l'utilisateur trie lui-même.
+
+interface TriageWordRow {
+  id: string;
+  mot: string;
+  traduction: string | null;
+  niveau: string;
+  type: string | null;
+  frequence: number;
+}
+
+export async function handleSrsTriage(req: Request, env: Env): Promise<Response> {
+  const params = new URL(req.url).searchParams;
+  const profileId = params.get('profileId') ?? 'default';
+  const parsedLimit = parseInt(params.get('limit') ?? '60', 10);
+  const limit = Math.min(Math.max(Number.isFinite(parsedLimit) ? parsedLimit : 60, 10), 120);
+
+  const trickyPlaceholders = [...TRICKY_A1_WORDS].map(() => '?').join(', ');
+
+  const result = await env.DB.prepare(`
+    SELECT w.id, w.mot, w.traduction, w.niveau, w.type, w.frequence
+    FROM words w
+    LEFT JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
+    WHERE w.niveau = 'A1'
+      AND w.frequence >= 4
+      AND LOWER(w.mot) NOT IN (${trickyPlaceholders})
+      AND (
+        wp.id IS NULL
+        OR (
+          wp.seen_count <= 1
+          AND wp.fail_count = 0
+          AND wp.status != 'known'
+          AND wp.review_history NOT LIKE '%user_marked_known%'
+          AND wp.review_history NOT LIKE '%triage_focus%'
+        )
+      )
+    ORDER BY w.frequence DESC, LENGTH(w.mot) ASC, w.mot ASC
+    LIMIT ?
+  `).bind(profileId, ...TRICKY_A1_WORDS, limit).all<TriageWordRow>();
+
+  return json({ words: result.results, total: result.results.length });
 }

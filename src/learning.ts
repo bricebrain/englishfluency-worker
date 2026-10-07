@@ -17,7 +17,8 @@ type LearningEventType =
   | 'podcast_completed'
   | 'lesson_completed'
   | 'expression_reinforced'
-  | 'roadmap_step_completed';
+  | 'roadmap_step_completed'
+  | 'word_marked_known';
 
 interface LearningEventBody {
   profileId: string;

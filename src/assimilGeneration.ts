@@ -1,6 +1,8 @@
 import type { Env } from './types';
 import type { AssimilLessonArtifact, AssimilLevel } from './assimilModel';
 
+export type AssimilGenerationProvider = 'deepseek' | 'gemini';
+
 export class AssimilGenerationError extends Error {
   constructor(message: string) {
     super(message);
@@ -17,6 +19,14 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function extractGeminiText(data: {
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+}): string | null {
+  const parts = data.candidates?.[0]?.content?.parts ?? [];
+  const text = parts.map((part) => part.text).filter(Boolean).join('\n').trim();
+  return text || null;
 }
 
 function buildPrompt(index: number, level: AssimilLevel, transcript: string): string {
@@ -145,7 +155,7 @@ export async function translateLinesToFrench(
   return out;
 }
 
-export async function generateAssimilArtifact(
+async function generateAssimilArtifactWithDeepSeek(
   env: Env,
   index: number,
   level: AssimilLevel,
@@ -191,4 +201,80 @@ export async function generateAssimilArtifact(
   }
 
   return parsed;
+}
+
+async function generateAssimilArtifactWithGemini(
+  env: Env,
+  index: number,
+  level: AssimilLevel,
+  transcript: string,
+  model = 'gemini-3.5-flash',
+): Promise<AssimilLessonArtifact> {
+  const apiKey = await env.GEMINI_API_KEY.get().catch(() => null);
+  if (!apiKey) throw new AssimilGenerationError('GEMINI_API_KEY manquant');
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          role: 'user',
+          parts: [{
+            text: [
+              'You are a senior English pedagogy architect for a French learner.',
+              'Build high-quality original lesson material from an audio transcript.',
+              'Be precise, practical, and aligned with CEFR progression.',
+              'Respond only with valid JSON.',
+              '',
+              buildPrompt(index, level, transcript),
+            ].join('\n'),
+          }],
+        }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          maxOutputTokens: 5200,
+        },
+      }),
+      signal: AbortSignal.timeout(120_000),
+    },
+  ).catch((error) => {
+    throw new AssimilGenerationError(error instanceof Error ? error.message : 'Gemini fetch failed');
+  });
+
+  if (!res.ok) {
+    const preview = await res.text().catch(() => '');
+    throw new AssimilGenerationError(`Gemini HTTP ${res.status}: ${preview.slice(0, 240)}`);
+  }
+
+  const data = await res.json<{
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  }>().catch(() => null);
+  const raw = data ? extractGeminiText(data) : null;
+  if (!raw) throw new AssimilGenerationError('Gemini response without message content');
+
+  const parsed = extractJsonObject(raw) as AssimilLessonArtifact | null;
+  if (!parsed) {
+    throw new AssimilGenerationError(`Gemini JSON parse failed: ${raw.slice(0, 240)}`);
+  }
+
+  return parsed;
+}
+
+export async function generateAssimilArtifact(
+  env: Env,
+  index: number,
+  level: AssimilLevel,
+  transcript: string,
+  options: {
+    model?: string;
+    provider?: AssimilGenerationProvider;
+  } = {},
+): Promise<AssimilLessonArtifact> {
+  if (options.provider === 'gemini') {
+    return generateAssimilArtifactWithGemini(env, index, level, transcript, options.model);
+  }
+
+  return generateAssimilArtifactWithDeepSeek(env, index, level, transcript);
 }
