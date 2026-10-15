@@ -78,25 +78,35 @@ export async function handleCreateContent(req: Request, env: Env): Promise<Respo
   if (!body?.profileId || !body?.id || !body?.type) return err('profileId, id, type requis');
   if (!VALID_TYPES.has(body.type)) return err(`type invalide : ${body.type}`);
 
-  // Vérif limite par type
-  const countRow = await env.DB.prepare(
-    'SELECT COUNT(*) as c FROM content WHERE profile_id = ? AND type = ?'
-  ).bind(body.profileId, body.type).first<{ c: number }>();
+  // Une mise à jour (même id, ex. republication depuis l'atelier) ne doit
+  // jamais faire disparaître un autre contenu : la limite par type ne
+  // s'applique qu'à la création d'un nouveau contenu.
+  const existing = await env.DB.prepare('SELECT id FROM content WHERE id = ?')
+    .bind(body.id).first<{ id: string }>();
 
-  if ((countRow?.c ?? 0) >= MAX_PER_TYPE) {
-    // Supprime le plus ancien
-    const oldest = await env.DB.prepare(
-      'SELECT id FROM content WHERE profile_id = ? AND type = ? ORDER BY created_at ASC LIMIT 1'
-    ).bind(body.profileId, body.type).first<{ id: string }>();
-    if (oldest) await env.DB.prepare('DELETE FROM content WHERE id = ?').bind(oldest.id).run();
+  if (!existing) {
+    const countRow = await env.DB.prepare(
+      'SELECT COUNT(*) as c FROM content WHERE profile_id = ? AND type = ?'
+    ).bind(body.profileId, body.type).first<{ c: number }>();
+
+    if ((countRow?.c ?? 0) >= MAX_PER_TYPE) {
+      // Supprime le plus ancien
+      const oldest = await env.DB.prepare(
+        'SELECT id FROM content WHERE profile_id = ? AND type = ? ORDER BY created_at ASC LIMIT 1'
+      ).bind(body.profileId, body.type).first<{ id: string }>();
+      if (oldest) await env.DB.prepare('DELETE FROM content WHERE id = ?').bind(oldest.id).run();
+    }
   }
 
+  // level/topic : mis à jour s'ils sont fournis, conservés sinon
   await env.DB.prepare(`
     INSERT INTO content (id, profile_id, type, title, level, topic, body, metadata, audio_r2_key)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title=excluded.title, body=excluded.body, metadata=excluded.metadata,
-      audio_r2_key=excluded.audio_r2_key
+      audio_r2_key=excluded.audio_r2_key,
+      level=COALESCE(excluded.level, content.level),
+      topic=COALESCE(excluded.topic, content.topic)
   `).bind(
     body.id, body.profileId, body.type,
     body.title ?? null, body.level ?? null, body.topic ?? null,
