@@ -17,6 +17,25 @@ interface ContentRow {
 
 const VALID_TYPES = new Set(['story', 'grammar_note', 'translation', 'podcast', 'course']);
 const MAX_PER_TYPE = 50;
+const MAX_AUDIO_BYTES = 100 * 1024 * 1024; // 100 Mo
+
+// POST /content/audio?key=prepared-content/<slug>.mp3
+// Upload d'un MP3 pour l'import depuis l'atelier local (body = octets bruts).
+export async function handleUploadAudio(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const key = new URL(req.url).searchParams.get('key') ?? '';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(key) || key.includes('..') || key.length > 200) {
+    return err('Clé R2 invalide');
+  }
+
+  const body = await req.arrayBuffer();
+  if (!body.byteLength) return err('Corps vide');
+  if (body.byteLength > MAX_AUDIO_BYTES) return err('Audio trop lourd (max 100 Mo)', 413);
+
+  await env.AUDIO.put(key, body, { httpMetadata: { contentType: 'audio/mpeg' } });
+  return json({ ok: true, key, size: body.byteLength });
+}
 
 // GET /content?profileId=&type=story&limit=30&offset=0
 export async function handleGetContent(req: Request, env: Env): Promise<Response> {
