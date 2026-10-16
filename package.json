@@ -10,11 +10,13 @@
     "migrate:remote": "wrangler d1 migrations apply englishfluency --remote",
     "seed:generate": "node scripts/generate-seed-sql.mjs",
     "seed:local": "npm run seed:generate && wrangler d1 execute englishfluency --local --file=scripts/seed.sql",
-    "seed:remote": "npm run seed:generate && wrangler d1 execute englishfluency --remote --file=scripts/seed.sql"
+    "seed:remote": "npm run seed:generate && wrangler d1 execute englishfluency --remote --file=scripts/seed.sql",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250525.0",
     "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
     "wrangler": "^4.0.0"
   },
   "dependencies": {
