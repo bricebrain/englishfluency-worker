@@ -2,10 +2,12 @@
  * Proxy transparent vers les APIs IA.
  * L'app envoie sa requête au Worker, le Worker la retransmet avec la vraie clé.
  * Les clés sont des wrangler secrets — elles ne quittent jamais Cloudflare.
+ * L'appel exige le secret du Worker : sans lui, n'importe qui pourrait
+ * consommer les crédits IA en connaissant l'adresse du Worker.
  */
 
 import type { Env } from './types';
-import { err } from './utils';
+import { err, isAuthorized } from './utils';
 
 type ProxyTarget = 'openai' | 'openrouter' | 'gemini' | 'groq' | 'deepseek' | 'xai';
 
@@ -40,6 +42,8 @@ export async function handleProxy(
   env: Env,
   pathAfterProxy: string,
 ): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
   const [target, ...rest] = pathAfterProxy.split('/');
 
   if (!isValidTarget(target)) {

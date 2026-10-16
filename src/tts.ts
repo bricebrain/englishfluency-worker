@@ -6,7 +6,7 @@
  */
 
 import type { Env } from './types';
-import { err } from './utils';
+import { err, isAuthorized } from './utils';
 
 const OPENAI_TTS_MODEL = 'gpt-4o-mini-tts';
 const GEMINI_TTS_MODEL = 'gemini-3.1-flash-tts-preview';
@@ -81,6 +81,7 @@ function pcmToWav(pcmBase64: string): Uint8Array {
 // ── POST /tts/openai ────────────────────────────────────────────────────────
 
 export async function handleTtsOpenAi(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
   const body = await req.json<{
     text: string; voice?: string; instructions?: string; model?: string;
   }>().catch(() => null);
@@ -126,6 +127,7 @@ export async function handleTtsOpenAi(req: Request, env: Env): Promise<Response>
 // ── POST /tts/gemini ────────────────────────────────────────────────────────
 
 export async function handleTtsGemini(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
   const body = await req.json<{ text: string; voice?: string; model?: string }>().catch(() => null);
   if (!body?.text) return err('text requis');
 
@@ -175,6 +177,7 @@ export async function handleTtsGemini(req: Request, env: Env): Promise<Response>
 // ── POST /tts/groq ─────────────────────────────────────────────────────────
 
 export async function handleTtsGroq(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
   const body = await req.json<{ text: string; voice?: string; model?: string }>().catch(() => null);
   if (!body?.text) return err('text requis');
 
