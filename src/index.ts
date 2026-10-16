@@ -158,6 +158,9 @@ export default {
       const key = path.slice('/audio/'.length);
       return handleServeAudio(req, env, key);
     }
+    if (method === 'HEAD' && path.startsWith('/audio/')) {
+      return handleServeAudio(req, env, path.slice('/audio/'.length));
+    }
     if (method === 'GET' && path === '/assimil/lessons') return handleAssimilLessons(req, env);
     if (method === 'GET' && path === '/assimil/progress') return handleAssimilProgress(req, env);
     if (method === 'GET' && path === '/assimil/runpod/status') return handleAssimilRunPodStatus(req, env);

@@ -211,19 +211,76 @@ export async function handleTtsGroq(req: Request, env: Env): Promise<Response> {
 
 // ── GET /audio/:key (sert depuis R2) ────────────────────────────────────────
 
-export async function handleServeAudio(_req: Request, env: Env, key: string): Promise<Response> {
-  const object = await env.AUDIO.get(key);
-  if (!object) {
-    return new Response('Audio introuvable', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
+// Clés immuables : cache TTS adressé par empreinte, et audios de l'atelier
+// versionnés `prepared-content/<contentId>-<kind>-<audioRevision>.mp3`.
+// Les anciennes clés fixes (`prepared-content/<id>.mp3`, `<id>-en.mp3`) ont
+// pu être réécrites : elles ne sont pas servies en `immutable`.
+const VERSIONED_PREPARED_KEY = /^prepared-content\/.+-[0-9a-f]{8}\.mp3$/;
+
+export function audioCacheControl(key: string): string {
+  if (key.startsWith('tts/') || VERSIONED_PREPARED_KEY.test(key)) return 'public, max-age=31536000, immutable';
+  if (key.startsWith('prepared-content/')) return 'public, max-age=3600, must-revalidate';
+  return 'public, max-age=31536000, immutable';
+}
+
+export type ByteRange = { offset: number; length: number };
+
+/**
+ * Interprète un en-tête Range sur une ressource de `size` octets.
+ * - `null` : pas de plage exploitable (absente, autre unité, plusieurs
+ *   plages, syntaxe invalide) → réponse complète 200 ;
+ * - `'unsatisfiable'` → 416 ;
+ * - sinon la plage, bornée à la taille du fichier.
+ */
+export function parseRange(header: string | null, size: number): ByteRange | 'unsatisfiable' | null {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return null;
+  const [, startText, endText] = match;
+  if (!startText && !endText) return null;
+  if (!startText) {
+    const suffix = Number(endText);
+    if (suffix === 0 || size === 0) return 'unsatisfiable';
+    const length = Math.min(suffix, size);
+    return { offset: size - length, length };
+  }
+  const start = Number(startText);
+  const end = endText ? Number(endText) : size - 1;
+  if (start >= size || end < start) return 'unsatisfiable';
+  return { offset: start, length: Math.min(end, size - 1) - start + 1 };
+}
+
+// GET|HEAD /audio/<clé> — public (le lecteur <audio> n'envoie pas de secret).
+// Gère `Range: bytes=a-b | a- | -n` (206 / 416), indispensable à Safari iOS.
+export async function handleServeAudio(req: Request, env: Env, key: string): Promise<Response> {
+  const head = await env.AUDIO.head(key);
+  if (!head) {
+    return new Response(req.method === 'HEAD' ? null : 'Audio introuvable', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
   }
 
-  const contentType = object.httpMetadata?.contentType ?? (key.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg');
-
-  return new Response(object.body, {
-    headers: {
-      'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=31536000, immutable',
-      'Access-Control-Allow-Origin': '*',
-    },
+  const size = head.size;
+  const headers = new Headers({
+    'Content-Type': head.httpMetadata?.contentType ?? (key.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg'),
+    'Cache-Control': audioCacheControl(key),
+    'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
   });
+  if (head.httpEtag) headers.set('ETag', head.httpEtag);
+
+  const range = parseRange(req.headers.get('Range'), size);
+  if (range === 'unsatisfiable') {
+    headers.set('Content-Range', `bytes */${size}`);
+    headers.delete('Content-Type');
+    return new Response(null, { status: 416, headers });
+  }
+
+  const status = range ? 206 : 200;
+  headers.set('Content-Length', String(range ? range.length : size));
+  if (range) headers.set('Content-Range', `bytes ${range.offset}-${range.offset + range.length - 1}/${size}`);
+  if (req.method === 'HEAD') return new Response(null, { status, headers });
+
+  const object = await env.AUDIO.get(key, range ? { range } : undefined);
+  if (!object) return new Response('Audio introuvable', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
+  return new Response(object.body, { status, headers });
 }
