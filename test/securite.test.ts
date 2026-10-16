@@ -106,7 +106,7 @@ const LECTURES = [
   '/assimil/preparation/status', '/assimil/lesson/1', '/assimil/lesson/1/transcription-status', '/profiles',
   '/profile?profileId=default', '/srs/session?profileId=default', '/srs/stats?profileId=default',
   '/srs/triage?profileId=default', '/learning/mission?profileId=default', '/learning/insights?profileId=default',
-  '/srs/progress?profileId=default', '/content?profileId=default', '/dictation?profileId=default',
+  '/srs/progress?profileId=default', '/content?profileId=default', '/content/x', '/dictation?profileId=default',
   '/lingvist/session?profileId=default', '/lingvist/cards?profileId=default', '/lingvist/card/x',
   '/calibration?profileId=default', '/podcasts/daily', '/lessons/channel', '/admin/channels', '/articles',
   '/reading-library/items', '/reading-library/items/x/segments', '/podcast-feeds', '/podcast-feeds/recommend',

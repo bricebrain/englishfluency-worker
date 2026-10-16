@@ -3,7 +3,7 @@ import { json, err, isAuthorized } from './utils';
 import { handleProxy } from './proxy';
 import { handleGetProfile, handleCreateProfile, handleListProfiles, handleDeleteProfile } from './profile';
 import { handleGetSrsProgress, handleSrsReview, handleSrsPromote, handleSrsStats, handleSrsSession, handleSrsCalibrate, handleSrsKnown, handleSrsTriage } from './srs';
-import { handleGetContent, handleCreateContent, handleDeleteContent, handlePatchContent, handleUploadAudio } from './content';
+import { handleGetContent, handleGetContentItem, handleCreateContent, handleDeleteContent, handlePatchContent, handleUploadAudio } from './content';
 import { handleGetDictation, handleSaveDictation } from './dictation';
 import {
   handleGetLingvistCard, handleGetLingvistCards, handleUpsertLingvistCard,
@@ -220,6 +220,7 @@ export default {
     if (method === 'GET'    && path === '/content')              return handleGetContent(req, env);
     if (method === 'POST'   && path === '/content')              return handleCreateContent(req, env);
     if (method === 'POST'   && path === '/content/audio')        return handleUploadAudio(req, env);
+    if (method === 'GET'    && path.match(/^\/content\/[^/]+$/)) return handleGetContentItem(req, env, path.split('/')[2]);
     if (method === 'DELETE' && path.match(/^\/content\/[^/]+$/)) return handleDeleteContent(req, env, path.split('/')[2]);
     if (method === 'PATCH'  && path.match(/^\/content\/[^/]+$/)) return handlePatchContent(req, env, path.split('/')[2]);
 

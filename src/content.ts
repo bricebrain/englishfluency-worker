@@ -1,6 +1,7 @@
 /**
  * Routes Contenu IA (histoires, notes grammaire, traductions, podcasts, cours)
- * GET    /content?profileId=&type=&limit=
+ * GET    /content?profileId=&type=&limit=&view=summary
+ * GET    /content/:id
  * POST   /content
  * DELETE /content/:id
  * PATCH  /content/:id
@@ -57,12 +58,21 @@ export async function handleGetContent(req: Request, env: Env): Promise<Response
   }
 
   const { results } = await query.all<ContentRow>();
+  const summary = url.searchParams.get('view') === 'summary';
 
   return json({
-    items: results.map(deserializeContent),
+    items: results.map(summary ? summarizeContent : deserializeContent),
     count: results.length,
     offset,
   });
+}
+
+// GET /content/:id — contenu complet (la liste en vue résumée ne contient
+// ni segments, ni chunks, ni textes longs).
+export async function handleGetContentItem(_req: Request, env: Env, id: string): Promise<Response> {
+  const row = await env.DB.prepare('SELECT * FROM content WHERE id = ?').bind(id).first<ContentRow>();
+  if (!row) return err('Contenu introuvable', 404);
+  return json(deserializeContent(row));
 }
 
 // POST /content
@@ -163,5 +173,41 @@ function deserializeContent(row: ContentRow) {
     audioR2Key: row.audio_r2_key,
     isFavorite: row.is_favorite === 1,
     createdAt: row.created_at,
+  };
+}
+
+// Vue résumée d'un contenu pour les listes : la metadata v2 de l'atelier
+// pèse ~75 Ko par contenu (segments, chunks, textes EN/FR). On ne garde que
+// les champs scalaires courts, et on remplace les tableaux par des compteurs.
+const SUMMARY_MAX_STRING = 500;
+const SUMMARY_BODY_EXCERPT = 600;
+
+function countArray(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+export function summarizeContent(row: ContentRow) {
+  const full = deserializeContent(row);
+  const metadata: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(full.metadata as Record<string, unknown>)) {
+    if (value === null || typeof value === 'number' || typeof value === 'boolean') metadata[key] = value;
+    else if (typeof value === 'string' && value.length <= SUMMARY_MAX_STRING) metadata[key] = value;
+  }
+  const source = full.metadata as Record<string, unknown>;
+  const segments = Array.isArray(source.segments) ? source.segments as Array<Record<string, unknown>> : [];
+  // Un corps JSON structuré (leçons partagées) n'est jamais tronqué : la PWA le parse.
+  const structured = full.body.trim().startsWith('{');
+  const bodyTruncated = !structured && full.body.length > SUMMARY_BODY_EXCERPT;
+  return {
+    ...full,
+    body: bodyTruncated ? `${full.body.slice(0, SUMMARY_BODY_EXCERPT).trimEnd()}…` : full.body,
+    metadata,
+    summary: {
+      segmentCount: segments.length,
+      chunkCount: countArray(source.chunks),
+      grammarPointCount: countArray(source.grammarPoints),
+      hasTimings: segments.length > 0 && segments.every((s) => typeof s.startMs === 'number' && typeof s.endMs === 'number'),
+      bodyTruncated,
+    },
   };
 }
