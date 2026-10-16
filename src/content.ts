@@ -177,10 +177,15 @@ function deserializeContent(row: ContentRow) {
 }
 
 // Vue résumée d'un contenu pour les listes : la metadata v2 de l'atelier
-// pèse ~75 Ko par contenu (segments, chunks, textes EN/FR). On ne garde que
-// les champs scalaires courts, et on remplace les tableaux par des compteurs.
+// pèse ~75 Ko par contenu (segments, chunks, textes EN/FR). On garde les
+// champs scalaires, les textes longs sont tronqués (aperçu) et listés dans
+// `summary.truncatedKeys`, les tableaux et objets remplacés par des compteurs.
 const SUMMARY_MAX_STRING = 500;
 const SUMMARY_BODY_EXCERPT = 600;
+
+function excerpt(text: string, max: number): string {
+  return `${text.slice(0, max).trimEnd()}…`;
+}
 
 function countArray(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
@@ -189,9 +194,16 @@ function countArray(value: unknown): number {
 export function summarizeContent(row: ContentRow) {
   const full = deserializeContent(row);
   const metadata: Record<string, unknown> = {};
+  const truncatedKeys: string[] = [];
   for (const [key, value] of Object.entries(full.metadata as Record<string, unknown>)) {
     if (value === null || typeof value === 'number' || typeof value === 'boolean') metadata[key] = value;
-    else if (typeof value === 'string' && value.length <= SUMMARY_MAX_STRING) metadata[key] = value;
+    else if (typeof value === 'string') {
+      if (value.length <= SUMMARY_MAX_STRING) metadata[key] = value;
+      else {
+        metadata[key] = excerpt(value, SUMMARY_MAX_STRING);
+        truncatedKeys.push(key);
+      }
+    }
   }
   const source = full.metadata as Record<string, unknown>;
   const segments = Array.isArray(source.segments) ? source.segments as Array<Record<string, unknown>> : [];
@@ -200,7 +212,7 @@ export function summarizeContent(row: ContentRow) {
   const bodyTruncated = !structured && full.body.length > SUMMARY_BODY_EXCERPT;
   return {
     ...full,
-    body: bodyTruncated ? `${full.body.slice(0, SUMMARY_BODY_EXCERPT).trimEnd()}…` : full.body,
+    body: bodyTruncated ? excerpt(full.body, SUMMARY_BODY_EXCERPT) : full.body,
     metadata,
     summary: {
       segmentCount: segments.length,
@@ -208,6 +220,7 @@ export function summarizeContent(row: ContentRow) {
       grammarPointCount: countArray(source.grammarPoints),
       hasTimings: segments.length > 0 && segments.every((s) => typeof s.startMs === 'number' && typeof s.endMs === 'number'),
       bodyTruncated,
+      truncatedKeys,
     },
   };
 }

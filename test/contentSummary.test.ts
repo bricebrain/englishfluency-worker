@@ -38,11 +38,20 @@ describe('GET /content?view=summary', () => {
     const text = await response.text();
     const data = JSON.parse(text) as { items: Array<Record<string, any>> };
     const item = data.items[0];
-    expect(item.metadata).toEqual({
+    expect(item.metadata).toMatchObject({
       schemaVersion: 2, sourceType: 'youtube', sourceUrl: 'https://youtu.be/x', sourceLanguage: 'en',
       audioOrigin: 'original', contentRevision: 'abc123', durationLabel: '12 min', durationSeconds: 720,
     });
-    expect(item.summary).toEqual({ segmentCount: 120, chunkCount: 2, grammarPointCount: 1, hasTimings: true, bodyTruncated: true });
+    expect(item.metadata.segments).toBeUndefined();
+    expect(item.metadata.chunks).toBeUndefined();
+    for (const key of ['textEn', 'textFr', 'transcriptText']) {
+      expect(item.metadata[key].length).toBeLessThanOrEqual(501);
+      expect(item.metadata[key].endsWith('…')).toBe(true);
+    }
+    expect(item.summary).toEqual({
+      segmentCount: 120, chunkCount: 2, grammarPointCount: 1, hasTimings: true, bodyTruncated: true,
+      truncatedKeys: ['transcriptText', 'textEn', 'textFr'],
+    });
     expect(item.body.length).toBeLessThanOrEqual(601);
     expect(item.body.endsWith('…')).toBe(true);
     expect(item).toMatchObject({ id: 'cyber', title: 'Titre cyber', audioR2Key: 'prepared-content/cyber-faithful-1a2b3c4d.mp3' });
