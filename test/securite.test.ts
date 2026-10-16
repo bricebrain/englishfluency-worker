@@ -4,9 +4,8 @@
  * Le proxy IA et les routes TTS exigent le secret depuis le correctif
  * « fix: require auth on AI proxy and TTS routes ».
  *
- * Les tests `it.fails` restants DOCUMENTENT une faille encore présente :
- * ils passent tant qu'elle existe. Une fois corrigée, ils échoueront et il
- * faudra remplacer `it.fails` par `it`.
+ * Les lectures (GET/HEAD) exigent le secret depuis le correctif
+ * « fix: require auth on GET reads », sauf GET / et GET /audio/*.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -101,14 +100,51 @@ describe('TTS : authentification obligatoire', () => {
   });
 });
 
-describe('FAILLE — lectures de données personnelles sans authentification', () => {
-  it.fails('GET /content refuse une requête sans clé', async () => {
-    const { env } = createEnv();
-    expect((await call(env, '/content?profileId=default', { auth: false })).status).toBe(401);
+// Toutes les routes GET de src/index.ts (avec des paramètres concrets)
+const LECTURES = [
+  '/youtube/search?q=x', '/youtube/videos?ids=x', '/assimil/lessons', '/assimil/progress', '/assimil/runpod/status',
+  '/assimil/preparation/status', '/assimil/lesson/1', '/assimil/lesson/1/transcription-status', '/profiles',
+  '/profile?profileId=default', '/srs/session?profileId=default', '/srs/stats?profileId=default',
+  '/srs/triage?profileId=default', '/learning/mission?profileId=default', '/learning/insights?profileId=default',
+  '/srs/progress?profileId=default', '/content?profileId=default', '/dictation?profileId=default',
+  '/lingvist/session?profileId=default', '/lingvist/cards?profileId=default', '/lingvist/card/x',
+  '/calibration?profileId=default', '/podcasts/daily', '/lessons/channel', '/admin/channels', '/articles',
+  '/reading-library/items', '/reading-library/items/x/segments', '/podcast-feeds', '/podcast-feeds/recommend',
+  '/podcast-feeds/x/episodes', '/podcast-feeds/episodes/x/lesson', '/podcast-feeds/episodes/x/transcription-status',
+  '/podcast-feeds/episodes/x', '/srt/sources', '/srt/r2-objects', '/srt/sources/x/episodes', '/srt/episodes/x/scenes',
+  '/words/count', '/words/sync', '/words/random', '/words/grammar-seed', '/words', '/words/x',
+];
+
+describe('Lectures : authentification obligatoire', () => {
+  it('la liste couvre toutes les routes GET de src/index.ts', async () => {
+    const { readFileSync } = await import('node:fs');
+    const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+    const routesGet = source.split('\n').filter((ligne) => /method === 'GET'\s*&&\s*path/.test(ligne)).length;
+    // + la route publique « / » et « /audio/ », hors liste
+    expect(LECTURES.length + 2).toBe(routesGet);
   });
 
-  it.fails('GET /srs/stats refuse une requête sans clé', async () => {
+  it.each(LECTURES)('GET %s refuse une requête sans clé', async (chemin) => {
     const { env } = createEnv();
-    expect((await call(env, '/srs/stats?profileId=default', { auth: false })).status).toBe(401);
+    const appels = espionnerFetch();
+    const response = await call(env, chemin, { auth: false });
+    expect(response.status).toBe(401);
+    expect(appels).toHaveLength(0);
+  });
+
+  it('HEAD est soumis à la même règle', async () => {
+    const { env } = createEnv();
+    expect((await call(env, '/content?profileId=default', { method: 'HEAD', auth: false })).status).toBe(401);
+  });
+
+  it('GET / (santé) reste public', async () => {
+    const { env } = createEnv();
+    expect((await call(env, '/', { auth: false })).status).toBe(200);
+  });
+
+  it('avec le secret, les lectures fonctionnent', async () => {
+    const { env } = createEnv();
+    expect((await call(env, '/content?profileId=default')).status).toBe(200);
+    expect((await call(env, '/srs/stats?profileId=default')).status).toBe(200);
   });
 });

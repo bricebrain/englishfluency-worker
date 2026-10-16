@@ -1,5 +1,5 @@
 import type { Env } from './types';
-import { json, err } from './utils';
+import { json, err, isAuthorized } from './utils';
 import { handleProxy } from './proxy';
 import { handleGetProfile, handleCreateProfile, handleListProfiles, handleDeleteProfile } from './profile';
 import { handleGetSrsProgress, handleSrsReview, handleSrsPromote, handleSrsStats, handleSrsSession, handleSrsCalibrate, handleSrsKnown, handleSrsTriage } from './srs';
@@ -122,6 +122,17 @@ export default {
           'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         },
       });
+    }
+
+    // ── Authentification des lectures ────────────────────────────────────
+    // Toutes les lectures exigent le secret, sauf la santé (GET /) et les
+    // fichiers audio (GET /audio/*) : le lecteur <audio> du navigateur ne
+    // peut pas envoyer d'en-tête Authorization. Les autres méthodes gardent
+    // la vérification faite dans chaque handler.
+    const isRead = method === 'GET' || method === 'HEAD';
+    const isPublicRead = path === '/' || path.startsWith('/audio/');
+    if (isRead && !isPublicRead && !isAuthorized(req, env.API_SECRET)) {
+      return err('Non autorisé', 401);
     }
 
     // ── Health ───────────────────────────────────────────────────────────
