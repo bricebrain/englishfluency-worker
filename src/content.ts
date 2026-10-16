@@ -9,6 +9,9 @@
 
 import type { Env } from './types';
 import { json, err, isAuthorized } from './utils';
+import {
+  activationStatements, foreignOwner, isPreparedKey, pendingStatement, PREPARED_PREFIX, retireContentStatement, sqlTimestamp,
+} from './audioReferences';
 
 interface ContentRow {
   id: string; profile_id: string; type: string; title: string | null;
@@ -20,14 +23,27 @@ const VALID_TYPES = new Set(['story', 'grammar_note', 'translation', 'podcast', 
 const MAX_PER_TYPE = 50;
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024; // 100 Mo
 
-// POST /content/audio?key=prepared-content/<slug>.mp3
+const CONTENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
+
+// POST /content/audio?key=prepared-content/<id>-<kind>-<audioRevision>.mp3&contentId=<id>
 // Upload d'un MP3 pour l'import depuis l'atelier local (body = octets bruts).
+// Avec `contentId`, la clé doit appartenir à ce contenu et elle est
+// enregistrée en `pending` jusqu'au POST /content qui l'active. Sans
+// `contentId` (ancien atelier), le comportement historique est conservé.
 export async function handleUploadAudio(req: Request, env: Env): Promise<Response> {
   if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
 
-  const key = new URL(req.url).searchParams.get('key') ?? '';
+  const params = new URL(req.url).searchParams;
+  const key = params.get('key') ?? '';
   if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(key) || key.includes('..') || key.length > 200) {
     return err('Clé R2 invalide');
+  }
+  const contentId = params.get('contentId');
+  if (contentId !== null) {
+    if (!CONTENT_ID.test(contentId)) return err('contentId invalide');
+    if (!key.startsWith(`${PREPARED_PREFIX}${contentId}-`)) return err('La clé doit commencer par prepared-content/<contentId>-');
+    const owner = await foreignOwner(env, key, contentId);
+    if (owner) return err('Cette clé appartient à un autre contenu', 403);
   }
 
   const body = await req.arrayBuffer();
@@ -35,7 +51,8 @@ export async function handleUploadAudio(req: Request, env: Env): Promise<Respons
   if (body.byteLength > MAX_AUDIO_BYTES) return err('Audio trop lourd (max 100 Mo)', 413);
 
   await env.AUDIO.put(key, body, { httpMetadata: { contentType: 'audio/mpeg' } });
-  return json({ ok: true, key, size: body.byteLength });
+  if (contentId !== null) await pendingStatement(env, key, contentId).run();
+  return json({ ok: true, key, size: body.byteLength, ...(contentId !== null ? { state: 'pending' } : {}) });
 }
 
 // GET /content?profileId=&type=story&limit=30&offset=0
@@ -88,6 +105,14 @@ export async function handleCreateContent(req: Request, env: Env): Promise<Respo
   if (!body?.profileId || !body?.id || !body?.type) return err('profileId, id, type requis');
   if (!VALID_TYPES.has(body.type)) return err(`type invalide : ${body.type}`);
 
+  const audioKey = body.audioR2Key ?? null;
+  if (isPreparedKey(audioKey) && await foreignOwner(env, audioKey, body.id)) {
+    return err('Cette clé audio appartient à un autre contenu', 403);
+  }
+
+  const now = sqlTimestamp();
+  const statements: D1PreparedStatement[] = [];
+
   // Une mise à jour (même id, ex. republication depuis l'atelier) ne doit
   // jamais faire disparaître un autre contenu : la limite par type ne
   // s'applique qu'à la création d'un nouveau contenu.
@@ -100,16 +125,19 @@ export async function handleCreateContent(req: Request, env: Env): Promise<Respo
     ).bind(body.profileId, body.type).first<{ c: number }>();
 
     if ((countRow?.c ?? 0) >= MAX_PER_TYPE) {
-      // Supprime le plus ancien
+      // Supprime le plus ancien ; son audio part au nettoyage différé
       const oldest = await env.DB.prepare(
         'SELECT id FROM content WHERE profile_id = ? AND type = ? ORDER BY created_at ASC LIMIT 1'
       ).bind(body.profileId, body.type).first<{ id: string }>();
-      if (oldest) await env.DB.prepare('DELETE FROM content WHERE id = ?').bind(oldest.id).run();
+      if (oldest) {
+        statements.push(env.DB.prepare('DELETE FROM content WHERE id = ?').bind(oldest.id));
+        statements.push(retireContentStatement(env, oldest.id, now));
+      }
     }
   }
 
   // level/topic : mis à jour s'ils sont fournis, conservés sinon
-  await env.DB.prepare(`
+  statements.push(env.DB.prepare(`
     INSERT INTO content (id, profile_id, type, title, level, topic, body, metadata, audio_r2_key)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
@@ -121,8 +149,11 @@ export async function handleCreateContent(req: Request, env: Env): Promise<Respo
     body.id, body.profileId, body.type,
     body.title ?? null, body.level ?? null, body.topic ?? null,
     body.body ?? '', JSON.stringify(body.metadata ?? {}),
-    body.audioR2Key ?? null,
-  ).run();
+    audioKey,
+  ));
+  // Nouvelle clé active, ancienne clé retirée : dans la même transaction
+  statements.push(...activationStatements(env, body.id, audioKey, now));
+  await env.DB.batch(statements);
 
   return json({ ok: true });
 }
@@ -132,11 +163,18 @@ export async function handleDeleteContent(req: Request, env: Env, id: string): P
   if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
 
   const row = await env.DB.prepare('SELECT audio_r2_key FROM content WHERE id = ?').bind(id).first<{ audio_r2_key: string | null }>();
-  if (row?.audio_r2_key) {
+  // Les audios de l'atelier ne sont jamais supprimés ici : leurs références
+  // passent `retired` et la tâche de nuit ne les efface que si plus rien
+  // (carte SRS, transfert) ne les utilise. Les autres clés gardent
+  // l'ancien comportement.
+  if (row?.audio_r2_key && !isPreparedKey(row.audio_r2_key)) {
     try { await env.AUDIO.delete(row.audio_r2_key); } catch { /* best-effort */ }
   }
 
-  await env.DB.prepare('DELETE FROM content WHERE id = ?').bind(id).run();
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM content WHERE id = ?').bind(id),
+    retireContentStatement(env, id),
+  ]);
   return json({ ok: true });
 }
 
@@ -154,9 +192,14 @@ export async function handlePatchContent(req: Request, env: Env, id: string): Pr
   if (body.audioR2Key !== undefined) { updates.push('audio_r2_key = ?'); params.push(body.audioR2Key); }
 
   if (!updates.length) return err('Rien à mettre à jour');
+  if (isPreparedKey(body.audioR2Key) && await foreignOwner(env, body.audioR2Key, id)) {
+    return err('Cette clé audio appartient à un autre contenu', 403);
+  }
 
   params.push(id);
-  await env.DB.prepare(`UPDATE content SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run();
+  const update = env.DB.prepare(`UPDATE content SET ${updates.join(', ')} WHERE id = ?`).bind(...params);
+  if (body.audioR2Key === undefined) await update.run();
+  else await env.DB.batch([update, ...activationStatements(env, id, body.audioR2Key || null)]);
   return json({ ok: true });
 }
 

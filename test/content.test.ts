@@ -112,13 +112,18 @@ describe('PATCH et DELETE /content/:id', () => {
     expect((await lister(env)).items[0].isFavorite).toBe(true);
   });
 
-  it('supprime le contenu et son audio R2', async () => {
-    const { env, audio } = createEnv();
+  // LOT 1 : l'audio de l'atelier n'est plus supprimé immédiatement ; sa
+  // référence est retirée et la tâche de nuit le supprime plus tard s'il
+  // n'est plus utilisé (test/audioReferences.test.ts).
+  it('supprime le contenu et retire son audio R2 (suppression différée)', async () => {
+    const { env, audio, db } = createEnv();
     await audio.put('prepared-content/a.mp3', new Uint8Array([1, 2, 3]));
     await call(env, '/content', { method: 'POST', body: payloadAtelier('a') });
     expect((await call(env, '/content/a', { method: 'DELETE' })).status).toBe(200);
     expect((await lister(env)).count).toBe(0);
-    expect(audio.objects.has('prepared-content/a.mp3')).toBe(false);
+    expect(audio.objects.has('prepared-content/a.mp3')).toBe(true);
+    const ref = await db.prepare("SELECT state FROM audio_references WHERE key = 'prepared-content/a.mp3'").first<{ state: string }>();
+    expect(ref?.state).toBe('retired');
   });
 
   it('refuse la suppression sans clé', async () => {

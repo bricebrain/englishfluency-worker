@@ -3,6 +3,7 @@ import { json, err, isAuthorized } from './utils';
 import { handleProxy } from './proxy';
 import { handleGetProfile, handleCreateProfile, handleListProfiles, handleDeleteProfile } from './profile';
 import { handleGetSrsProgress, handleSrsReview, handleSrsPromote, handleSrsStats, handleSrsSession, handleSrsCalibrate, handleSrsKnown, handleSrsTriage } from './srs';
+import { cleanupAudioReferences, handleRetireAudio } from './audioReferences';
 import { handleGetContent, handleGetContentItem, handleCreateContent, handleDeleteContent, handlePatchContent, handleUploadAudio } from './content';
 import { handleGetDictation, handleSaveDictation } from './dictation';
 import {
@@ -103,6 +104,15 @@ export default {
         console.error(JSON.stringify({
           error: error instanceof Error ? error.message : 'unknown',
           task: 'assimil_prepare_next',
+        }));
+      }
+      try {
+        const cleanup = await cleanupAudioReferences(env);
+        console.log(JSON.stringify({ cron: event.cron, task: 'audio_cleanup', deleted: cleanup.deleted }));
+      } catch (error) {
+        console.error(JSON.stringify({
+          error: error instanceof Error ? error.message : 'unknown',
+          task: 'audio_cleanup',
         }));
       }
     })());
@@ -223,6 +233,7 @@ export default {
     if (method === 'GET'    && path === '/content')              return handleGetContent(req, env);
     if (method === 'POST'   && path === '/content')              return handleCreateContent(req, env);
     if (method === 'POST'   && path === '/content/audio')        return handleUploadAudio(req, env);
+    if (method === 'POST'   && path === '/content/audio/retire') return handleRetireAudio(req, env);
     if (method === 'GET'    && path.match(/^\/content\/[^/]+$/)) return handleGetContentItem(req, env, path.split('/')[2]);
     if (method === 'DELETE' && path.match(/^\/content\/[^/]+$/)) return handleDeleteContent(req, env, path.split('/')[2]);
     if (method === 'PATCH'  && path.match(/^\/content\/[^/]+$/)) return handlePatchContent(req, env, path.split('/')[2]);
