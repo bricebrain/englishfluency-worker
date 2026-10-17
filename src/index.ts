@@ -15,8 +15,13 @@ import { handleTtsOpenAi, handleTtsGemini, handleTtsGroq, handleServeAudio } fro
 import { handleYouTubeSearch, handleYouTubeVideos } from './youtube';
 import {
   handleGetWords, handleGetCount, handleSync, handleGetWord,
-  handlePatchAudio, handleRandom, handleGrammarSeed,
+  handleDeleteWords, handlePatchAudio, handleRandom, handleGrammarSeed,
 } from './vocabulary';
+import {
+  handleListVocabularyEnrichments,
+  handlePublishVocabularyBatch,
+  handleRollbackVocabularyEntry,
+} from './vocabularyEnrichment';
 import { handleArticleLesson, handleAnswerFeedback, handlePromoteWords } from './articles';
 import { handleGetReadingSources } from './readingSources';
 import { handleQrGenerate, handleQrAnalyze } from './qr';
@@ -329,12 +334,24 @@ export default {
       return handleListSrtScenes(req, env, path.split('/')[3]);
     }
 
+    // ── Enrichissements versionnés du vocabulaire ────────────────────────
+    if (method === 'GET' && path === '/admin/vocabulary/enrichments') {
+      return handleListVocabularyEnrichments(req, env);
+    }
+    if (method === 'POST' && path.match(/^\/admin\/vocabulary\/batches\/[^/]+\/publish$/)) {
+      return handlePublishVocabularyBatch(req, env, decodeURIComponent(path.split('/')[4]));
+    }
+    if (method === 'POST' && path.match(/^\/admin\/vocabulary\/entries\/[^/]+\/rollback$/)) {
+      return handleRollbackVocabularyEntry(req, env, decodeURIComponent(path.split('/')[4]));
+    }
+
     // ── Vocabulary (existant) ─────────────────────────────────────────────
     if (method === 'GET' && path === '/words/count')        return handleGetCount(env);
     if (method === 'GET' && path === '/words/sync')         return handleSync(req, env);
     if (method === 'GET' && path === '/words/random')       return handleRandom(req, env);
     if (method === 'GET' && path === '/words/grammar-seed') return handleGrammarSeed(req, env);
     if (method === 'GET' && path === '/words')              return handleGetWords(req, env);
+    if (method === 'DELETE' && path === '/words')           return handleDeleteWords(req, env);
     if (method === 'GET' && path.match(/^\/words\/[^/]+$/)) {
       return handleGetWord(path.split('/')[2], env);
     }

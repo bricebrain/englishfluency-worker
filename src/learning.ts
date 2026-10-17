@@ -8,7 +8,9 @@ import {
 } from './learningPath';
 import { err, isAuthorized, json } from './utils';
 
-type LearningModule = 'review' | 'lingvist' | 'speak' | 'read' | 'listen' | 'course';
+type LearningModule =
+  | 'review' | 'lingvist' | 'speak' | 'read' | 'listen' | 'course'
+  | 'grammar' | 'conversation';
 type LearningSkill = 'vocabulary' | 'speaking' | 'reading' | 'listening' | 'grammar';
 type LearningEventType =
   | 'review_word'
@@ -18,7 +20,9 @@ type LearningEventType =
   | 'lesson_completed'
   | 'expression_reinforced'
   | 'roadmap_step_completed'
-  | 'word_marked_known';
+  | 'word_marked_known'
+  | 'sentence_pattern_completed'
+  | 'live_session_imported';
 
 interface LearningEventBody {
   profileId: string;
@@ -178,7 +182,9 @@ interface PedagogicalProfile {
 }
 
 const MODULE_ROUTE_MAP: Record<LearningModule | 'learn', string> = {
+  conversation: '/seance-live',
   course: '/courses',
+  grammar: '/construire-phrases',
   learn: '/review?mode=new',
   lingvist: '/lingvist',
   listen: '/ecouter',

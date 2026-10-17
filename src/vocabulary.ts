@@ -3,6 +3,7 @@ import { rowToWord } from './types';
 import { json, err, isAuthorized } from './utils';
 
 const VALID_NIVEAUX = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);
+const MAX_BULK_DELETE = 200;
 
 // ── GET /words ─────────────────────────────────────────────────────────────
 // ?niveau=A1&limit=200&offset=0
@@ -48,6 +49,50 @@ export async function handleGetWord(id: string, env: Env): Promise<Response> {
   const row = await env.DB.prepare('SELECT * FROM words WHERE id = ?').bind(id).first<WordRow>();
   if (!row) return err('Mot introuvable', 404);
   return json(rowToWord(row));
+}
+
+// ── DELETE /words ──────────────────────────────────────────────────────────
+// Suppression globale : référentiel, progression SRS et cartes Lingvist.
+export async function handleDeleteWords(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+
+  const body = await req.json<{ ids?: unknown }>().catch(() => null);
+  if (!Array.isArray(body?.ids)) return err('Liste ids requise');
+  const ids = [...new Set(body.ids
+    .filter((id): id is string => typeof id === 'string')
+    .map((id) => id.trim())
+    .filter(Boolean))];
+  if (ids.length < 1 || ids.length > MAX_BULK_DELETE) {
+    return err(`Sélectionnez entre 1 et ${MAX_BULK_DELETE} mots`);
+  }
+
+  const placeholders = ids.map(() => '?').join(', ');
+  const { results: words } = await env.DB.prepare(
+    `SELECT id, mot FROM words WHERE id IN (${placeholders})`,
+  ).bind(...ids).all<{ id: string; mot: string }>();
+  const found = new Set(words.map((word) => word.id));
+  const missing = ids.filter((id) => !found.has(id));
+  if (missing.length) return json({ error: 'Certains mots sont introuvables', missing }, 409);
+
+  const [progress, cards, versions, enrichments, deleted] = await env.DB.batch([
+    env.DB.prepare(`DELETE FROM word_progress WHERE word_id IN (${placeholders})`).bind(...ids),
+    env.DB.prepare(`DELETE FROM lingvist_cards WHERE word_id IN (${placeholders})`).bind(...ids),
+    env.DB.prepare(`DELETE FROM vocabulary_enrichment_versions WHERE word_id IN (${placeholders})`).bind(...ids),
+    env.DB.prepare(`DELETE FROM vocabulary_enrichments WHERE word_id IN (${placeholders})`).bind(...ids),
+    env.DB.prepare(`DELETE FROM words WHERE id IN (${placeholders})`).bind(...ids),
+  ]);
+
+  return json({
+    ok: true,
+    deleted: Number(deleted.meta.changes ?? 0),
+    ids,
+    related: {
+      wordProgress: Number(progress.meta.changes ?? 0),
+      lingvistCards: Number(cards.meta.changes ?? 0),
+      enrichmentVersions: Number(versions.meta.changes ?? 0),
+      enrichments: Number(enrichments.meta.changes ?? 0),
+    },
+  });
 }
 
 // ── PATCH /words/:id/audio ──────────────────────────────────────────────────
