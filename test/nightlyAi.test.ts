@@ -85,3 +85,12 @@ describe('analyse des bilans Live', () => {
     expect(db.sqlite.prepare('SELECT COUNT(*) AS n FROM live_report_analyses').get()).toMatchObject({ n: 1 });
   });
 });
+
+describe('cron unique', () => {
+  it('ne lance la maintenance qu’au passage de 3 h 15 UTC', async () => {
+    const { isMaintenanceRun } = await import('../src/index');
+    expect(isMaintenanceRun(Date.UTC(2026, 9, 17, 3, 15))).toBe(true);
+    expect(isMaintenanceRun(Date.UTC(2026, 9, 17, 3, 30))).toBe(false);
+    expect(isMaintenanceRun(Date.UTC(2026, 9, 17, 0, 15))).toBe(false);
+  });
+});

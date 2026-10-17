@@ -29,8 +29,9 @@
 
   // ── Cron — préparation Assimil progressive (no-op automatique quand tout est prêt)
   "triggers": {
-    // 3 h 17 : préparation Assimil et nettoyage audio ; toutes les 15 min de 0 h à 6 h UTC : tâches IA de nuit
-    "crons": ["17 3 * * *", "*/15 0-5 * * *"]
+    // Un seul déclencheur (limite de l'offre) : toutes les 15 min de 0 h à 6 h UTC pour les tâches IA de nuit ;
+    // le passage de 3 h 15 lance aussi la préparation Assimil et le nettoyage audio.
+    "crons": ["*/15 0-5 * * *"]
   },
 
   // ── Service Binding : accès direct au Worker TechPulse (même compte, zéro latence HTTP)

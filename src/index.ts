@@ -16,8 +16,11 @@ import { handleDailyExercises } from './dailyContent';
 import { handleLiveAnalyze } from './liveAnalysis';
 import { handleListEnrichmentDrafts, handleRunNightlyAi, runNightlyAiPass } from './nightlyAi';
 
-/** Cron des tâches IA de nuit (voir wrangler.jsonc). */
-const NIGHTLY_AI_CRON = '*/15 0-5 * * *';
+/** Le passage de 3 h 15 UTC du cron unique lance aussi la maintenance (Assimil, audio). */
+export function isMaintenanceRun(scheduledTime: number): boolean {
+  const date = new Date(scheduledTime);
+  return date.getUTCHours() === 3 && date.getUTCMinutes() === 15;
+}
 import { handleLingvistPrepare, handleLingvistSession } from './lingvistSession';
 import { handleTtsOpenAi, handleTtsGemini, handleTtsGroq, handleTtsDeepgram, handleServeAudio } from './tts';
 import { handleYouTubeSearch, handleYouTubeVideos } from './youtube';
@@ -96,16 +99,14 @@ import {
 export default {
   // ── Cron — préparation Assimil progressive ─────────────────────────────
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    if (event.cron === NIGHTLY_AI_CRON) {
-      ctx.waitUntil((async () => {
-        try {
-          console.log(JSON.stringify({ cron: event.cron, task: 'nightly_ai', ...(await runNightlyAiPass(env)) }));
-        } catch (error) {
-          console.error(JSON.stringify({ cron: event.cron, task: 'nightly_ai', error: error instanceof Error ? error.message : 'unknown' }));
-        }
-      })());
-      return;
-    }
+    ctx.waitUntil((async () => {
+      try {
+        console.log(JSON.stringify({ cron: event.cron, task: 'nightly_ai', ...(await runNightlyAiPass(env)) }));
+      } catch (error) {
+        console.error(JSON.stringify({ cron: event.cron, task: 'nightly_ai', error: error instanceof Error ? error.message : 'unknown' }));
+      }
+    })());
+    if (!isMaintenanceRun(event.scheduledTime)) return;
     ctx.waitUntil((async () => {
       try {
         const result = await prepareNextAssimilLessons(env, { limit: 3, provider: 'auto' });
