@@ -12,6 +12,12 @@
 
 import type { Env } from './types';
 import { json, err, isAuthorized } from './utils';
+import {
+  ENRICHMENT_JOIN_SQL,
+  ENRICHMENT_SELECT_SQL,
+  withEnrichment,
+  type EnrichmentColumns,
+} from './vocabularyEnrichmentMapper';
 
 interface WordProgressRow {
   id: string; profile_id: string; word_id: string;
@@ -38,12 +44,13 @@ export async function handleGetSrsProgress(req: Request, env: Env): Promise<Resp
 
   const [wordsResult, progressResult, historyResult] = await Promise.all([
     env.DB.prepare(
-      `SELECT id, mot, type, niveau, traduction, ipa_uk, ipa_us,
-        json_extract(examples, '$[0].en') AS exemple_en,
-        json_extract(examples, '$[0].fr') AS exemple_fr,
-        examples, audio_uk, audio_us
-       FROM words ORDER BY niveau ASC, frequence DESC`
-    ).all<WordRow>(),
+      `SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us,
+        json_extract(w.examples, '$[0].en') AS exemple_en,
+        json_extract(w.examples, '$[0].fr') AS exemple_fr,
+        w.examples, w.audio_uk, w.audio_us, ${ENRICHMENT_SELECT_SQL}
+       FROM words w ${ENRICHMENT_JOIN_SQL}
+       ORDER BY w.niveau ASC, w.frequence DESC`
+    ).all<WordRow & EnrichmentColumns>(),
     env.DB.prepare('SELECT * FROM word_progress WHERE profile_id = ?').bind(profileId).all<WordProgressRow>(),
     env.DB.prepare('SELECT day, count FROM review_history_daily WHERE profile_id = ? ORDER BY day DESC LIMIT 60').bind(profileId).all<DailyRow>(),
   ]);
@@ -51,7 +58,7 @@ export async function handleGetSrsProgress(req: Request, env: Env): Promise<Resp
   const progressMap = new Map(progressResult.results.map((p) => [p.word_id, p]));
   const now = new Date().toISOString();
 
-  const words = wordsResult.results.map((word) => {
+  const words = wordsResult.results.map(withEnrichment).map((word) => {
     const p = progressMap.get(word.id);
     let parsedExamples: { en: string; fr: string }[] = [];
     try { parsedExamples = JSON.parse(word.examples || '[]'); } catch { /* keep empty */ }
@@ -336,18 +343,19 @@ export async function handleSrsSession(req: Request, env: Env): Promise<Response
     SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD},
       wp.prochaine_revision, wp.intervalle, wp.facilite, wp.repetitions,
       wp.derniere_revision, wp.seen_count, wp.success_count, wp.almost_count, wp.fail_count,
-      wp.level, wp.status, wp.review_history
+      wp.level, wp.status, wp.review_history, ${ENRICHMENT_SELECT_SQL}
     FROM words w
     INNER JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
+    ${ENRICHMENT_JOIN_SQL}
     WHERE wp.repetitions > 0 AND wp.prochaine_revision <= datetime('now')
       AND ${DUE_WORD_LEVEL_FILTER_SQL}
     ORDER BY
       CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
       wp.prochaine_revision ASC
     LIMIT ?
-  `).bind(profileId, levelFloor, limit).all<SessionWordRow>();
+  `).bind(profileId, levelFloor, limit).all<SessionWordRow & EnrichmentColumns>();
 
-  const dueWords = dueResult.results.map((w) => {
+  const dueWords = dueResult.results.map(withEnrichment).map((w) => {
     let parsedExamples: { en: string; fr: string }[] = [];
     try { parsedExamples = JSON.parse(w.examples || '[]'); } catch { /* keep empty */ }
     let review_history: unknown[] = [];
@@ -364,9 +372,10 @@ export async function handleSrsSession(req: Request, env: Env): Promise<Response
   if (newLimit > 0) {
     const candidateLimit = Math.min(newLimit * 3, 200);
     const newResult = await env.DB.prepare(`
-      SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD}
+      SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD}, ${ENRICHMENT_SELECT_SQL}
       FROM words w
       LEFT JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
+      ${ENRICHMENT_JOIN_SQL}
       WHERE wp.id IS NULL
         AND ${NEW_WORD_LEVEL_FILTER_SQL}
       ORDER BY
@@ -374,10 +383,10 @@ export async function handleSrsSession(req: Request, env: Env): Promise<Response
         w.frequence DESC,
         w.niveau ASC
       LIMIT ?
-    `).bind(profileId, levelFloor, candidateLimit).all<WordRow>();
+    `).bind(profileId, levelFloor, candidateLimit).all<WordRow & EnrichmentColumns>();
 
     const now = new Date().toISOString();
-    newWords = rankNewWordsByPriority(newResult.results, newLimit).map((w) => parseWordRow(w, undefined, now));
+    newWords = rankNewWordsByPriority(newResult.results.map(withEnrichment), newLimit).map((w) => parseWordRow(w, undefined, now));
   }
 
   // 3. Historique de révision (60 jours) — léger
@@ -643,9 +652,10 @@ export async function handleSrsTriage(req: Request, env: Env): Promise<Response>
   const limit = Math.min(Math.max(Number.isFinite(parsedLimit) ? parsedLimit : 5000, 10), 5000);
 
   const result = await env.DB.prepare(`
-    SELECT w.id, w.mot, w.traduction, w.niveau, w.type, w.frequence
+    SELECT w.id, w.mot, w.traduction, w.niveau, w.type, w.frequence, ${ENRICHMENT_SELECT_SQL}
     FROM words w
     LEFT JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
+    ${ENRICHMENT_JOIN_SQL}
     WHERE wp.id IS NULL
       OR (
         wp.status != 'known'
@@ -664,7 +674,7 @@ export async function handleSrsTriage(req: Request, env: Env): Promise<Response>
       w.frequence DESC,
       LOWER(w.mot) ASC
     LIMIT ?
-  `).bind(profileId, limit).all<TriageWordRow>();
+  `).bind(profileId, limit).all<TriageWordRow & EnrichmentColumns>();
 
-  return json({ words: result.results, total: result.results.length });
+  return json({ words: result.results.map(withEnrichment), total: result.results.length });
 }

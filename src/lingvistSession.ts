@@ -1,5 +1,12 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
+import {
+  ENRICHMENT_JOIN_SQL,
+  ENRICHMENT_SELECT_SQL,
+  withEnrichment,
+  type EnrichmentColumns,
+  type VocabularyEnrichmentDto,
+} from './vocabularyEnrichmentMapper';
 import { formatLesson, safeJsonParse, type AssimilLessonRow } from './assimilModel';
 import {
   DUE_WORD_LEVEL_FILTER_SQL,
@@ -55,6 +62,7 @@ interface WordRow {
 interface PreparedWord extends Omit<SessionWordRow, 'examples' | 'review_history'> {
   examples: Array<{ en: string; fr: string }>;
   review_history: unknown[];
+  enrichment?: VocabularyEnrichmentDto | null;
 }
 
 interface LearningEventSignalRow {
@@ -199,7 +207,8 @@ async function loadRecentWeaknessSignals(env: Env, profileId: string): Promise<s
     .map(([signal]) => signal);
 }
 
-function hydrateExistingWord(row: SessionWordRow): PreparedWord {
+function hydrateExistingWord(joined: SessionWordRow & EnrichmentColumns): PreparedWord {
+  const row = withEnrichment(joined);
   return {
     ...row,
     examples: parseJson<Array<{ en: string; fr: string }>>(row.examples, []),
@@ -207,7 +216,8 @@ function hydrateExistingWord(row: SessionWordRow): PreparedWord {
   };
 }
 
-function hydrateNewWord(row: WordRow, now: string): PreparedWord {
+function hydrateNewWord(joined: WordRow & EnrichmentColumns, now: string): PreparedWord {
+  const row = withEnrichment(joined);
   return {
     ...row,
     examples: parseJson<Array<{ en: string; fr: string }>>(row.examples, []),
@@ -224,6 +234,11 @@ function hydrateNewWord(row: WordRow, now: string): PreparedWord {
     status: 'new',
     review_history: [],
   };
+}
+
+/** Traduction principale corrigée par l'atelier Vocabulaire, si publiée. */
+function enrichedTranslation(word: PreparedWord | undefined): string {
+  return cleanText(word?.enrichment?.primaryTranslation);
 }
 
 function cleanText(value: string | null | undefined): string {
@@ -361,7 +376,7 @@ function buildLocalPreparedCard(word: PreparedWord): PreparedCard {
     sentenceWithGap: buildGap(sentenceFull, answer),
     sentenceFull,
     translationFr,
-    wordTraductionFr: cleanText(word.traduction) || '',
+    wordTraductionFr: enrichedTranslation(word) || cleanText(word.traduction) || '',
     grammarHint: buildSafeGrammarHint(word, targetPos, targetPos === 'verb' ? inferVerbLabel(sentenceFull, answer) : null),
     inputPlaceholder: targetPos === 'verb' ? 'Ecris la bonne forme verbale' : 'Ecris le mot manquant',
     source: 'local',
@@ -742,16 +757,17 @@ async function loadSessionWords(env: Env, profileId: string, limit: number): Pro
     SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD},
       wp.prochaine_revision, wp.intervalle, wp.facilite, wp.repetitions,
       wp.derniere_revision, wp.seen_count, wp.success_count, wp.almost_count, wp.fail_count,
-      wp.level, wp.status, wp.review_history
+      wp.level, wp.status, wp.review_history, ${ENRICHMENT_SELECT_SQL}
     FROM words w
     INNER JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
+    ${ENRICHMENT_JOIN_SQL}
     WHERE wp.repetitions > 0 AND wp.prochaine_revision <= datetime('now')
       AND ${DUE_WORD_LEVEL_FILTER_SQL}
     ORDER BY
       CASE WHEN w.id LIKE 'assim_%' THEN 0 ELSE 1 END,
       wp.prochaine_revision ASC
     LIMIT ?
-  `).bind(profileId, levelFloor, candidateLimit).all<SessionWordRow>();
+  `).bind(profileId, levelFloor, candidateLimit).all<SessionWordRow & EnrichmentColumns>();
 
   const dueWords = orderWordsForWeakness(dueResult.results.map(hydrateExistingWord), weaknessSignals, limit);
   const newLimit = Math.max(0, limit - dueWords.length);
@@ -759,9 +775,10 @@ async function loadSessionWords(env: Env, profileId: string, limit: number): Pro
 
   const newCandidateLimit = Math.min(newLimit * 3, 160);
   const newResult = await env.DB.prepare(`
-    SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD}
+    SELECT w.id, w.mot, w.type, w.niveau, w.traduction, w.ipa_uk, w.ipa_us, ${SELECT_WORD}, ${ENRICHMENT_SELECT_SQL}
     FROM words w
     LEFT JOIN word_progress wp ON wp.word_id = w.id AND wp.profile_id = ?
+    ${ENRICHMENT_JOIN_SQL}
     WHERE wp.id IS NULL
       AND ${NEW_WORD_LEVEL_FILTER_SQL}
     ORDER BY
@@ -769,7 +786,7 @@ async function loadSessionWords(env: Env, profileId: string, limit: number): Pro
       w.frequence DESC,
       w.niveau ASC
     LIMIT ?
-  `).bind(profileId, levelFloor, newCandidateLimit).all<WordRow>();
+  `).bind(profileId, levelFloor, newCandidateLimit).all<WordRow & EnrichmentColumns>();
 
   const now = new Date().toISOString();
   // Dépriorisation des A1 probablement acquis : le pool est d'abord trié par
@@ -859,7 +876,13 @@ export async function handleLingvistSession(req: Request, env: Env): Promise<Res
   const limit = Math.min(Math.max(parseInt(params.get('limit') ?? '40', 10), 1), 80);
   const words = await loadSessionWords(env, profileId, limit);
   const preparation = await loadPreparedCards(env, profileId, words, { forceRebuildInvalid: true });
-  const cards = preparation.cards;
+  const wordsById = new Map(words.map((word) => [word.id, word]));
+  // Les cartes préparées avant une correction gardent l'ancienne traduction :
+  // la traduction publiée par l'atelier la remplace pour le même mot.
+  const cards = preparation.cards.map((card) => {
+    const translation = enrichedTranslation(wordsById.get(card.wordId));
+    return translation ? { ...card, wordTraductionFr: translation } : card;
+  });
 
   return json({
     sessionId: `${profileId}_${Date.now()}`,
