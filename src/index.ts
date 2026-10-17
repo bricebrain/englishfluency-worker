@@ -11,6 +11,13 @@ import {
   handleGetCalibration, handleSaveCalibration, handleDeleteCalibration,
 } from './lingvist';
 import { handleLingvistAnalyze } from './lingvistAnalysis';
+import { handleSemanticIndex, handleSemanticSearch, handleWordContexts } from './semantic';
+import { handleDailyExercises } from './dailyContent';
+import { handleLiveAnalyze } from './liveAnalysis';
+import { handleListEnrichmentDrafts, handleRunNightlyAi, runNightlyAiPass } from './nightlyAi';
+
+/** Cron des tâches IA de nuit (voir wrangler.jsonc). */
+const NIGHTLY_AI_CRON = '*/15 0-5 * * *';
 import { handleLingvistPrepare, handleLingvistSession } from './lingvistSession';
 import { handleTtsOpenAi, handleTtsGemini, handleTtsGroq, handleTtsDeepgram, handleServeAudio } from './tts';
 import { handleYouTubeSearch, handleYouTubeVideos } from './youtube';
@@ -89,6 +96,16 @@ import {
 export default {
   // ── Cron — préparation Assimil progressive ─────────────────────────────
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (event.cron === NIGHTLY_AI_CRON) {
+      ctx.waitUntil((async () => {
+        try {
+          console.log(JSON.stringify({ cron: event.cron, task: 'nightly_ai', ...(await runNightlyAiPass(env)) }));
+        } catch (error) {
+          console.error(JSON.stringify({ cron: event.cron, task: 'nightly_ai', error: error instanceof Error ? error.message : 'unknown' }));
+        }
+      })());
+      return;
+    }
     ctx.waitUntil((async () => {
       try {
         const result = await prepareNextAssimilLessons(env, { limit: 3, provider: 'auto' });
@@ -253,6 +270,13 @@ export default {
     if (method === 'GET' && path === '/lingvist/session') return handleLingvistSession(req, env);
     if (method === 'POST' && path === '/lingvist/prepare') return handleLingvistPrepare(req, env);
     if (method === 'POST' && path === '/lingvist/analyze') return handleLingvistAnalyze(req, env);
+    if (method === 'GET' && path === '/search/semantic') return handleSemanticSearch(req, env);
+    if (method === 'GET' && path === '/exercises/daily') return handleDailyExercises(req, env);
+    if (method === 'POST' && path === '/live/analyze') return handleLiveAnalyze(req, env);
+    if (method === 'POST' && path === '/admin/ai/nightly') return handleRunNightlyAi(req, env);
+    if (method === 'GET' && path === '/admin/vocabulary/drafts') return handleListEnrichmentDrafts(req, env);
+    if (method === 'GET' && path === '/search/word-contexts') return handleWordContexts(req, env);
+    if (method === 'POST' && path === '/admin/semantic/index') return handleSemanticIndex(req, env);
     if (method === 'GET' && path === '/lingvist/cards') return handleGetLingvistCards(req, env);
     if (method === 'GET' && path.match(/^\/lingvist\/card\/[^/]+$/)) {
       return handleGetLingvistCard(req, env, path.split('/')[3]);

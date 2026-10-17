@@ -1,5 +1,6 @@
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
+import { loadSceneQuestions } from './dailyContent';
 
 interface SrtCue {
   endMs: number;
@@ -624,5 +625,10 @@ export async function handleListSrtScenes(req: Request, env: Env, episodeId: str
   sql += ` ORDER BY scene_index`;
 
   const { results } = await env.DB.prepare(sql).bind(...binds).all<SceneRow>();
-  return json({ episodeId, items: results.map(mapScene), ok: true });
+  const questions = await loadSceneQuestions(env, results.map((row) => row.id));
+  return json({
+    episodeId,
+    items: results.map((row) => ({ ...mapScene(row), questions: questions.get(row.id) ?? [] })),
+    ok: true,
+  });
 }

@@ -18,13 +18,19 @@
   // ── Workers AI : correction des réponses Lingvist (DeepSeek en secours)
   "ai": { "binding": "AI" },
 
+  // ── Vectorize : recherche par le sens dans les contenus (bge-m3, 1024 dim., cosinus)
+  "vectorize": [
+    { "binding": "VECTORIZE", "index_name": "englishfluency-semantic" }
+  ],
+
   "vars": {
     "RUNPOD_AI_ENDPOINT_ID": "ql54gjc8r659yr"
   },
 
   // ── Cron — préparation Assimil progressive (no-op automatique quand tout est prêt)
   "triggers": {
-    "crons": ["17 3 * * *"]
+    // 3 h 17 : préparation Assimil et nettoyage audio ; toutes les 15 min de 0 h à 6 h UTC : tâches IA de nuit
+    "crons": ["17 3 * * *", "*/15 0-5 * * *"]
   },
 
   // ── Service Binding : accès direct au Worker TechPulse (même compte, zéro latence HTTP)

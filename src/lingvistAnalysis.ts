@@ -1,3 +1,4 @@
+import { runChat } from './aiBudget';
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
 
@@ -106,16 +107,11 @@ export function normalizeAnalysisPayload(raw: unknown): LingvistAnalysisPayload 
 
 async function analyzeWithWorkersAi(env: Env, prompt: string): Promise<LingvistAnalysisPayload | null> {
   if (!env.AI) return null;
-  const output = await env.AI.run(WORKERS_AI_ANALYSIS_MODEL as Parameters<Ai['run']>[0], {
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: prompt },
-    ],
-    temperature: 0.1,
-    max_tokens: 600,
-    response_format: { type: 'json_schema', json_schema: ANALYSIS_SCHEMA },
-  } as Record<string, unknown>) as { response?: unknown } | null;
-  return normalizeAnalysisPayload(output?.response);
+  const response = await runChat(env, WORKERS_AI_ANALYSIS_MODEL, [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: prompt },
+  ], { temperature: 0.1, maxTokens: 600, jsonSchema: ANALYSIS_SCHEMA });
+  return normalizeAnalysisPayload(response);
 }
 
 async function analyzeWithDeepSeek(env: Env, prompt: string): Promise<LingvistAnalysisPayload | null> {

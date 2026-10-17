@@ -112,7 +112,8 @@ const LECTURES = [
   '/reading-library/items', '/reading-library/items/x/segments', '/podcast-feeds', '/podcast-feeds/recommend',
   '/podcast-feeds/x/episodes', '/podcast-feeds/episodes/x/lesson', '/podcast-feeds/episodes/x/transcription-status',
   '/podcast-feeds/episodes/x', '/srt/sources', '/srt/r2-objects', '/srt/sources/x/episodes', '/srt/episodes/x/scenes',
-  '/admin/vocabulary/enrichments', '/words/count', '/words/sync', '/words/random',
+  '/admin/vocabulary/enrichments', '/admin/vocabulary/drafts', '/search/semantic?q=money',
+  '/search/word-contexts?word=range', '/exercises/daily?kind=story', '/words/count', '/words/sync', '/words/random',
   '/words/grammar-seed', '/words', '/words/x',
 ];
 

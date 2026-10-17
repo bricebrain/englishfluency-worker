@@ -6,13 +6,13 @@ const KINDS = new Set(['collocation', 'grammar_pattern', 'phrasal_verb', 'idiom'
 const MAX_ENTRIES = 50;
 
 type Enrichment = Record<string, unknown> & { id: string };
-type SourceRow = { id: string; mot: string; traduction: string | null; type: string; niveau: string };
+export type SourceRow = { id: string; mot: string; traduction: string | null; type: string; niveau: string };
 
 function nonEmpty(value: unknown, max = 600): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
 
-function validateEntry(entry: unknown, source: SourceRow): string[] {
+export function validateEntry(entry: unknown, source: SourceRow): string[] {
   if (!entry || typeof entry !== 'object') return ['entrée non objet'];
   const item = entry as Record<string, unknown>;
   const errors: string[] = [];

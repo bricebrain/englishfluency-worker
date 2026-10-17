@@ -7,6 +7,8 @@ export interface Env {
   DB: D1Database;
   /** Workers AI (quota quotidien gratuit du compte Cloudflare). */
   AI?: Ai;
+  /** Index Vectorize de la recherche par le sens (bge-m3, 1024 dimensions). */
+  VECTORIZE?: VectorizeIndex;
   AUDIO: R2Bucket;
   // Service Binding vers le Worker TechPulse (même compte Cloudflare, zéro latence HTTP)
   TECHPULSE: Fetcher;
