@@ -7,7 +7,9 @@ import { err, isAuthorized, json } from './utils';
  * La PWA n'appelle cette route que si sa vérification locale juge la réponse fausse.
  */
 
-export const WORKERS_AI_ANALYSIS_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+// Llama 3.1 8B : 7/8 verdicts justes sur le banc d'essai (contre 4/8 pour le 70B),
+// ~8 neurones par analyse (~1 200 gratuites/jour) et ~1,2 s.
+export const WORKERS_AI_ANALYSIS_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8-fast';
 const DEEPSEEK_MODEL = 'deepseek-v4-flash';
 const MAX_FIELD = 600;
 

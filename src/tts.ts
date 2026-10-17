@@ -2,6 +2,7 @@
  * TTS avec cache R2
  * POST /tts/openai  — génère + cache → retourne { audioUrl }
  * POST /tts/gemini  — génère + cache → retourne { audioUrl }
+ * POST /tts/deepgram — Deepgram Aura-2 (voix britannique) + cache → retourne { audioUrl }
  * GET  /audio/:key  — sert le fichier depuis R2
  */
 
@@ -121,6 +122,43 @@ export async function handleTtsOpenAi(req: Request, env: Env): Promise<Response>
     httpMetadata: { contentType: 'audio/mpeg' },
   });
 
+  return jsonResp({ audioUrl: `/audio/${r2Key}`, cached: false });
+}
+
+// ── POST /tts/deepgram ──────────────────────────────────────────────────────
+// Voix naturelle pour les mots et phrases, payée une seule fois grâce au cache R2.
+
+export const DEEPGRAM_TTS_VOICES = ['aura-2-pandora-en', 'aura-2-draco-en'] as const;
+const DEEPGRAM_DEFAULT_VOICE = 'aura-2-pandora-en';
+const DEEPGRAM_MAX_CHARS = 1800;
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function handleTtsDeepgram(req: Request, env: Env): Promise<Response> {
+  if (!isAuthorized(req, env.API_SECRET)) return err('Non autorisé', 401);
+  const body = await req.json<{ text?: unknown; voice?: unknown }>().catch(() => null);
+  const text = typeof body?.text === 'string' ? body.text.replace(/\s+/g, ' ').trim() : '';
+  if (!text) return err('text requis');
+  if (text.length > DEEPGRAM_MAX_CHARS) return err(`Texte limité à ${DEEPGRAM_MAX_CHARS} caractères`);
+  const voice = (DEEPGRAM_TTS_VOICES as readonly string[]).includes(String(body?.voice)) ? String(body?.voice) : DEEPGRAM_DEFAULT_VOICE;
+
+  const r2Key = `tts/deepgram/${voice}/${(await sha256Hex(`${voice}|${text}`)).slice(0, 40)}.mp3`;
+  if (await env.AUDIO.head(r2Key)) return jsonResp({ audioUrl: `/audio/${r2Key}`, cached: true });
+
+  if (!env.DEEPGRAM_API_KEY) return err('Clé Deepgram non configurée', 503);
+  const res = await fetch(`https://api.deepgram.com/v1/speak?model=${voice}&encoding=mp3`, {
+    method: 'POST',
+    headers: { Authorization: `Token ${env.DEEPGRAM_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) return err(`Deepgram TTS erreur: ${res.status}`, 502);
+
+  const audio = await res.arrayBuffer();
+  if (!audio.byteLength) return err('Deepgram TTS : audio vide', 502);
+  await env.AUDIO.put(r2Key, audio, { httpMetadata: { contentType: 'audio/mpeg' } });
   return jsonResp({ audioUrl: `/audio/${r2Key}`, cached: false });
 }
 

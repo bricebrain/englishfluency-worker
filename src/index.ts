@@ -12,7 +12,7 @@ import {
 } from './lingvist';
 import { handleLingvistAnalyze } from './lingvistAnalysis';
 import { handleLingvistPrepare, handleLingvistSession } from './lingvistSession';
-import { handleTtsOpenAi, handleTtsGemini, handleTtsGroq, handleServeAudio } from './tts';
+import { handleTtsOpenAi, handleTtsGemini, handleTtsGroq, handleTtsDeepgram, handleServeAudio } from './tts';
 import { handleYouTubeSearch, handleYouTubeVideos } from './youtube';
 import {
   handleGetWords, handleGetCount, handleSync, handleGetWord,
@@ -168,6 +168,7 @@ export default {
     // ── TTS + Audio R2 ───────────────────────────────────────────────────
     if (method === 'POST' && path === '/tts/openai')  return handleTtsOpenAi(req, env);
     if (method === 'POST' && path === '/tts/gemini')  return handleTtsGemini(req, env);
+    if (method === 'POST' && path === '/tts/deepgram') return handleTtsDeepgram(req, env);
     if (method === 'POST' && path === '/tts/groq')    return handleTtsGroq(req, env);
     if (method === 'GET'  && path.startsWith('/audio/')) {
       // /audio/tts/openai/abc.mp3  → key = tts/openai/abc.mp3
