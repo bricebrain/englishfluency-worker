@@ -5,6 +5,8 @@ interface SecretsStoreSecret {
 
 export interface Env {
   DB: D1Database;
+  /** Workers AI (quota quotidien gratuit du compte Cloudflare). */
+  AI?: Ai;
   AUDIO: R2Bucket;
   // Service Binding vers le Worker TechPulse (même compte Cloudflare, zéro latence HTTP)
   TECHPULSE: Fetcher;

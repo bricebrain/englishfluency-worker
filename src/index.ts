@@ -10,6 +10,7 @@ import {
   handleGetLingvistCard, handleGetLingvistCards, handleUpsertLingvistCard,
   handleGetCalibration, handleSaveCalibration, handleDeleteCalibration,
 } from './lingvist';
+import { handleLingvistAnalyze } from './lingvistAnalysis';
 import { handleLingvistPrepare, handleLingvistSession } from './lingvistSession';
 import { handleTtsOpenAi, handleTtsGemini, handleTtsGroq, handleServeAudio } from './tts';
 import { handleYouTubeSearch, handleYouTubeVideos } from './youtube';
@@ -250,6 +251,7 @@ export default {
     // ── Lingvist ─────────────────────────────────────────────────────────
     if (method === 'GET' && path === '/lingvist/session') return handleLingvistSession(req, env);
     if (method === 'POST' && path === '/lingvist/prepare') return handleLingvistPrepare(req, env);
+    if (method === 'POST' && path === '/lingvist/analyze') return handleLingvistAnalyze(req, env);
     if (method === 'GET' && path === '/lingvist/cards') return handleGetLingvistCards(req, env);
     if (method === 'GET' && path.match(/^\/lingvist\/card\/[^/]+$/)) {
       return handleGetLingvistCard(req, env, path.split('/')[3]);
