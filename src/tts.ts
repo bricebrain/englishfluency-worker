@@ -129,7 +129,7 @@ export async function handleTtsOpenAi(req: Request, env: Env): Promise<Response>
 // Voix naturelle pour les mots et phrases, payée une seule fois grâce au cache R2.
 
 export const DEEPGRAM_TTS_VOICES = ['aura-2-pandora-en', 'aura-2-draco-en'] as const;
-const DEEPGRAM_DEFAULT_VOICE = 'aura-2-pandora-en';
+const DEEPGRAM_DEFAULT_VOICE = 'aura-2-draco-en';
 const DEEPGRAM_MAX_CHARS = 1800;
 
 async function sha256Hex(value: string): Promise<string> {

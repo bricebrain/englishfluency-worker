@@ -23,7 +23,7 @@ describe('POST /tts/deepgram', () => {
     expect((await call(env, '/tts/deepgram', { method: 'POST', body: { text: 'a'.repeat(1801) } })).status).toBe(400);
   });
 
-  it('génère avec la voix britannique, met en cache R2, puis ne repaie pas', async () => {
+  it('génère avec la voix britannique Draco par défaut, met en cache R2, puis ne repaie pas', async () => {
     const { env } = deepgramEnv();
     const fetchSpy = vi.fn(async () => new Response(mp3, { headers: { 'Content-Type': 'audio/mpeg' } }));
     vi.stubGlobal('fetch', fetchSpy);
@@ -31,9 +31,9 @@ describe('POST /tts/deepgram', () => {
     const first = await call(env, '/tts/deepgram', { method: 'POST', body: { text: 'Prices range from 10 to 20 euros.' } });
     const firstBody = await first.json() as { audioUrl: string; cached: boolean };
     expect(firstBody.cached).toBe(false);
-    expect(firstBody.audioUrl).toMatch(/^\/audio\/tts\/deepgram\/aura-2-pandora-en\/[0-9a-f]{40}\.mp3$/);
+    expect(firstBody.audioUrl).toMatch(/^\/audio\/tts\/deepgram\/aura-2-draco-en\/[0-9a-f]{40}\.mp3$/);
     const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://api.deepgram.com/v1/speak?model=aura-2-pandora-en&encoding=mp3');
+    expect(url).toBe('https://api.deepgram.com/v1/speak?model=aura-2-draco-en&encoding=mp3');
     expect((init.headers as Record<string, string>).Authorization).toBe('Token cle-deepgram-test');
     expect(JSON.parse(String(init.body))).toEqual({ text: 'Prices range from 10 to 20 euros.' });
 
@@ -52,10 +52,10 @@ describe('POST /tts/deepgram', () => {
     const { env } = deepgramEnv();
     const fetchSpy = vi.fn(async () => new Response(mp3));
     vi.stubGlobal('fetch', fetchSpy);
-    await call(env, '/tts/deepgram', { method: 'POST', body: { text: 'hello', voice: 'aura-2-draco-en' } });
+    await call(env, '/tts/deepgram', { method: 'POST', body: { text: 'hello', voice: 'aura-2-pandora-en' } });
     await call(env, '/tts/deepgram', { method: 'POST', body: { text: 'hello', voice: 'voix-inconnue' } });
-    expect(String((fetchSpy.mock.calls[0] as unknown[])[0])).toContain('model=aura-2-draco-en');
-    expect(String((fetchSpy.mock.calls[1] as unknown[])[0])).toContain('model=aura-2-pandora-en');
+    expect(String((fetchSpy.mock.calls[0] as unknown[])[0])).toContain('model=aura-2-pandora-en');
+    expect(String((fetchSpy.mock.calls[1] as unknown[])[0])).toContain('model=aura-2-draco-en');
   });
 
   it('renvoie 502 sans rien mettre en cache si Deepgram échoue', async () => {
