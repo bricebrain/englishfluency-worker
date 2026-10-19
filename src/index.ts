@@ -1,3 +1,4 @@
+import { handleVocabularyPick } from './vocabularyPicks';
 import type { Env } from './types';
 import { json, err, isAuthorized } from './utils';
 import { handleProxy } from './proxy';
@@ -356,6 +357,7 @@ export default {
     }
 
     // ── Vocabulary (existant) ─────────────────────────────────────────────
+    if (method === 'POST' && path === '/words/picks') return handleVocabularyPick(req, env);
     if (method === 'GET' && path === '/words/count')        return handleGetCount(env);
     if (method === 'GET' && path === '/words/sync')         return handleSync(req, env);
     if (method === 'GET' && path === '/words/random')       return handleRandom(req, env);
