@@ -152,11 +152,10 @@ describe('Lectures : authentification obligatoire', () => {
 });
 
 describe('Fonctionnalité séries retirée', () => {
-  it('ne conserve ni routes SRT ni tables actives', async () => {
-    const { env, db } = createEnv();
+  // Les tables srt_* restent tant que la migration de suppression attend l'accord (migrations-en-attente/).
+  it('ne conserve aucune route SRT', async () => {
+    const { env } = createEnv();
     expect((await call(env, '/srt/sources')).status).toBe(404);
     expect((await call(env, '/srt/import-folder', { method: 'POST', body: {} })).status).toBe(404);
-    expect(db.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'srt_%'").all())
-      .toEqual([]);
   });
 });
