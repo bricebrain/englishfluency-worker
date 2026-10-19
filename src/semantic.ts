@@ -4,15 +4,15 @@ import { err, isAuthorized, json } from './utils';
 
 /**
  * Recherche dans les contenus de l'utilisateur.
- * - Recherche par le sens : passages (segments d'articles, scènes SRT, extraits de
- *   contenus préparés) encodés par bge-m3 et stockés dans Vectorize ; une requête
+ * - Recherche par le sens : passages (segments d'articles et extraits de contenus
+ *   préparés) encodés par bge-m3 et stockés dans Vectorize ; une requête
  *   en français trouve aussi les passages anglais de même sens.
  * - Contextes d'un mot : recherche exacte en SQL des phrases qui le contiennent,
  *   sans IA, pour l'encart « Dans tes contenus » des exercices.
  */
 
-export type PassageSource = 'content' | 'reading' | 'srt';
-const SOURCES: PassageSource[] = ['content', 'reading', 'srt'];
+export type PassageSource = 'content' | 'reading';
+const SOURCES: PassageSource[] = ['content', 'reading'];
 const EMBED_BATCH = 40;
 const MAX_TEXT = 1500;
 
@@ -117,20 +117,6 @@ async function pendingPassages(env: Env, limit: number): Promise<Passage[]> {
   }));
   if (pending.length >= limit) return pending.slice(0, limit);
 
-  const { results: scenes } = await env.DB.prepare(`
-    SELECT sc.id, sc.episode_id, sc.text, sc.level, e.title AS episode_title
-    FROM srt_scenes sc
-    JOIN srt_episodes e ON e.id = sc.episode_id
-    LEFT JOIN semantic_index si ON si.source = 'srt' AND si.ref_id = sc.id
-    WHERE si.vector_id IS NULL
-    LIMIT ?
-  `).bind(limit - pending.length).all<{ id: string; episode_id: string; text: string; level: string; episode_title: string }>();
-  scenes.forEach((row) => pending.push({
-    source: 'srt', refId: row.id, parentId: row.episode_id, level: row.level,
-    title: clean(row.episode_title, 200), text: clean(row.text),
-  }));
-  if (pending.length >= limit) return pending.slice(0, limit);
-
   const { results: contents } = await env.DB.prepare('SELECT id, title, level, body, metadata FROM content').all<ContentRow>();
   const passages = contents.flatMap(contentPassages);
   const ids = await Promise.all(passages.map((passage) => vectorIdFor(passage.source, passage.refId)));
@@ -141,12 +127,12 @@ async function pendingPassages(env: Env, limit: number): Promise<Passage[]> {
   return pending;
 }
 
-/** Supprime de l'index les passages dont la source a disparu. */
+/** Supprime les sources retirées et les passages dont la source a disparu. */
 async function purgeOrphans(env: Env): Promise<number> {
   const { results } = await env.DB.prepare(`
     SELECT si.vector_id FROM semantic_index si
-    WHERE (si.source = 'reading' AND NOT EXISTS (SELECT 1 FROM reading_library_segments s WHERE s.id = si.ref_id))
-       OR (si.source = 'srt' AND NOT EXISTS (SELECT 1 FROM srt_scenes s WHERE s.id = si.ref_id))
+    WHERE si.source NOT IN ('content', 'reading')
+       OR (si.source = 'reading' AND NOT EXISTS (SELECT 1 FROM reading_library_segments s WHERE s.id = si.ref_id))
        OR (si.source = 'content' AND NOT EXISTS (SELECT 1 FROM content c WHERE c.id = si.parent_id))
     LIMIT 200
   `).all<{ vector_id: string }>();
@@ -204,11 +190,12 @@ export async function searchPassages(env: Env, query: string, options: { limit?:
     ...(options.source ? { filter: { source: options.source } } : {}),
   });
   return result.matches
-    .map((match) => {
+    .flatMap((match) => {
       const metadata = (match.metadata ?? {}) as Record<string, unknown>;
-      return {
+      if (!SOURCES.includes(metadata.source as PassageSource)) return [];
+      const item: SearchResult = {
         score: Math.round(match.score * 1000) / 1000,
-        source: (SOURCES.includes(metadata.source as PassageSource) ? metadata.source : 'content') as PassageSource,
+        source: metadata.source as PassageSource,
         refId: clean(metadata.refId, 200),
         parentId: clean(metadata.parentId, 200),
         title: clean(metadata.title, 200),
@@ -216,8 +203,8 @@ export async function searchPassages(env: Env, query: string, options: { limit?:
         textFr: clean(metadata.textFr) || undefined,
         level: clean(metadata.level, 8) || undefined,
       };
-    })
-    .filter((item) => item.text);
+      return item.text ? [item] : [];
+    });
 }
 
 export interface WordContext {
@@ -250,21 +237,16 @@ export async function findWordContexts(env: Env, word: string, limit = 3): Promi
     }
   };
 
-  const [reading, scenes, contents] = await Promise.all([
+  const [reading, contents] = await Promise.all([
     env.DB.prepare(`
       SELECT s.item_id, s.text, i.title FROM reading_library_segments s JOIN reading_library_items i ON i.id = s.item_id
       WHERE LOWER(s.text) LIKE ? LIMIT 12
     `).bind(like).all<{ item_id: string; text: string; title: string }>(),
-    env.DB.prepare(`
-      SELECT sc.episode_id, sc.text, e.title FROM srt_scenes sc JOIN srt_episodes e ON e.id = sc.episode_id
-      WHERE LOWER(sc.text) LIKE ? LIMIT 12
-    `).bind(like).all<{ episode_id: string; text: string; title: string }>(),
     env.DB.prepare('SELECT id, title, level, body, metadata FROM content WHERE LOWER(metadata) LIKE ? OR LOWER(body) LIKE ? LIMIT 8')
       .bind(like, like).all<ContentRow>(),
   ]);
 
   contents.results.forEach((row) => contentPassages(row).forEach((passage) => add('content', row.id, passage.title, passage.text)));
-  scenes.results.forEach((row) => add('srt', row.episode_id, row.title, row.text));
   reading.results.forEach((row) => add('reading', row.item_id, row.title, row.text));
   return contexts.slice(0, limit);
 }

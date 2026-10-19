@@ -6,8 +6,7 @@ import { toVocabularyEnrichmentDto } from './vocabularyEnrichmentMapper';
 /**
  * Contenus générés par Workers AI à partir des mots à réviser :
  * - exercices « Construire des phrases » du jour ;
- * - histoire du jour qui réutilise ces mots ;
- * - questions de compréhension pour les scènes SRT qui n'en ont pas.
+ * - histoire du jour qui réutilise ces mots.
  * Générés la nuit (quota restant) ou à la demande, puis mis en cache en D1.
  */
 
@@ -251,61 +250,4 @@ export async function handleDailyExercises(req: Request, env: Env): Promise<Resp
     console.warn('exercises/daily', error instanceof Error ? error.message : error);
     return err('Génération indisponible', 502);
   }
-}
-
-// ── Questions de compréhension des scènes SRT ───────────────────────────────
-
-const QUESTIONS_SCHEMA = {
-  type: 'object',
-  properties: {
-    questions: { type: 'array', items: { type: 'object', properties: { question: { type: 'string' }, answer: { type: 'string' } }, required: ['question', 'answer'] } },
-  },
-  required: ['questions'],
-};
-
-export function normalizeQuestions(raw: unknown): { question: string; answer: string }[] {
-  const data = extractJsonObject(raw);
-  return (Array.isArray(data?.questions) ? data!.questions as Record<string, unknown>[] : [])
-    .map((item) => ({ question: cleanString(item?.question, 220), answer: cleanString(item?.answer, 300) }))
-    .filter((item) => item.question && item.answer)
-    .slice(0, 3);
-}
-
-/** Génère les questions de `limit` scènes SRT qui n'en ont pas. */
-export async function generateSrtQuestions(env: Env, limit: number): Promise<number> {
-  const { results } = await env.DB.prepare(`
-    SELECT sc.id, sc.text, sc.level FROM srt_scenes sc
-    LEFT JOIN srt_scene_questions q ON q.scene_id = sc.id
-    WHERE q.scene_id IS NULL
-    ORDER BY sc.episode_id, sc.scene_index
-    LIMIT ?
-  `).bind(limit).all<{ id: string; text: string; level: string }>();
-  let created = 0;
-  for (const scene of results) {
-    const raw = await runChat(env, MODELS.fast, [
-      { role: 'system', content: 'Tu crées des questions de compréhension en anglais sur une scène de série. Réponds seulement en JSON valide.' },
-      { role: 'user', content: `Scène (niveau ${scene.level}) :\n"""${cleanString(scene.text, 1800)}"""\nÉcris 2 questions en anglais dont la réponse est dans la scène, avec une réponse courte en anglais.` },
-    ], { temperature: 0.3, maxTokens: 400, jsonSchema: QUESTIONS_SCHEMA });
-    const questions = normalizeQuestions(raw);
-    if (!questions.length) continue;
-    await env.DB.prepare('INSERT OR REPLACE INTO srt_scene_questions (scene_id, questions_json, model) VALUES (?, ?, ?)')
-      .bind(scene.id, JSON.stringify(questions), MODELS.fast).run();
-    created += 1;
-  }
-  return created;
-}
-
-/** Questions déjà générées pour une liste de scènes. */
-export async function loadSceneQuestions(env: Env, sceneIds: string[]): Promise<Map<string, { question: string; answer: string }[]>> {
-  const map = new Map<string, { question: string; answer: string }[]>();
-  for (let start = 0; start < sceneIds.length; start += 90) {
-    const chunk = sceneIds.slice(start, start + 90);
-    if (!chunk.length) continue;
-    const { results } = await env.DB.prepare(`SELECT scene_id, questions_json FROM srt_scene_questions WHERE scene_id IN (${chunk.map(() => '?').join(', ')})`)
-      .bind(...chunk).all<{ scene_id: string; questions_json: string }>();
-    results.forEach((row) => {
-      try { map.set(row.scene_id, JSON.parse(row.questions_json)); } catch { /* ignorée */ }
-    });
-  }
-  return map;
 }

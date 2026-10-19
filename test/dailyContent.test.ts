@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { generateSrtQuestions, normalizeSentenceExercises, normalizeStory } from '../src/dailyContent';
+import { normalizeSentenceExercises, normalizeStory } from '../src/dailyContent';
 import { call, createEnv } from './support/env';
 
 const targets = [
@@ -38,7 +38,6 @@ describe('validation des contenus générés', () => {
     expect(normalizeStory(story, targets)).toMatchObject({ title: 'A new bike', wordsUsed: ['range', 'reliable'] });
   });
 });
-
 describe('GET /exercises/daily', () => {
   it('génère une fois par jour puis sert le cache', async () => {
     const { env, db } = createEnv();
@@ -72,22 +71,5 @@ describe('GET /exercises/daily', () => {
     Object.assign(env, { AI: { run: vi.fn(async () => ({ response: { exercises: [] } })) } });
     expect((await call(env, '/exercises/daily?kind=autre')).status).toBe(400);
     expect((await call(env, '/exercises/daily?profileId=default&kind=sentences')).status).toBe(503);
-  });
-});
-
-describe('questions des scènes SRT', () => {
-  it('génère les questions manquantes et les joint aux scènes', async () => {
-    const { env, db } = createEnv();
-    db.sqlite.exec(`
-      INSERT INTO srt_sources (id, title, r2_prefix) VALUES ('show', 'Show', 'srt/show/');
-      INSERT INTO srt_episodes (id, source_id, episode_no, title, r2_key) VALUES ('ep1', 'show', 1, 'Pilot', 'srt/show/ep1.srt');
-      INSERT INTO srt_scenes (id, episode_id, scene_index, start_ms, end_ms, start_time, end_time, text)
-        VALUES ('sc1', 'ep1', 1, 0, 1000, '00:00', '00:01', 'Where are you going? To the station.');
-    `);
-    Object.assign(env, { AI: { run: vi.fn(async () => ({ response: { questions: [{ question: 'Where is she going?', answer: 'To the station.' }] } })) } });
-    expect(await generateSrtQuestions(env, 5)).toBe(1);
-    expect(await generateSrtQuestions(env, 5)).toBe(0);
-    const { items } = await (await call(env, '/srt/episodes/ep1/scenes')).json() as { items: { id: string; questions: unknown[] }[] };
-    expect(items[0]?.questions).toEqual([{ question: 'Where is she going?', answer: 'To the station.' }]);
   });
 });

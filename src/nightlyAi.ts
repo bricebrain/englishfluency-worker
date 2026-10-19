@@ -6,7 +6,7 @@ import {
   runChat,
   usedNeuronsToday,
 } from './aiBudget';
-import { generateSrtQuestions, getOrCreateDaily } from './dailyContent';
+import { getOrCreateDaily } from './dailyContent';
 import { indexSemanticBatch } from './semantic';
 import type { Env } from './types';
 import { err, isAuthorized, json } from './utils';
@@ -237,7 +237,6 @@ export async function runNightlyAiPass(env: Env, budget = NIGHTLY_NEURON_BUDGET)
       }
       return generated;
     }],
-    ['srtQuestions', () => generateSrtQuestions(env, 6)],
     ['lingvistCards', () => regenerateLingvistCards(env, 5)],
     ['enrichmentDrafts', () => generateEnrichmentDrafts(env, 4)],
   ];

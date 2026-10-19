@@ -111,7 +111,7 @@ const LECTURES = [
   '/calibration?profileId=default', '/podcasts/daily', '/lessons/channel', '/admin/channels', '/articles',
   '/reading-library/items', '/reading-library/items/x/segments', '/podcast-feeds', '/podcast-feeds/recommend',
   '/podcast-feeds/x/episodes', '/podcast-feeds/episodes/x/lesson', '/podcast-feeds/episodes/x/transcription-status',
-  '/podcast-feeds/episodes/x', '/srt/sources', '/srt/r2-objects', '/srt/sources/x/episodes', '/srt/episodes/x/scenes',
+  '/podcast-feeds/episodes/x',
   '/admin/vocabulary/enrichments', '/admin/vocabulary/drafts', '/search/semantic?q=money',
   '/search/word-contexts?word=range', '/exercises/daily?kind=story', '/words/count', '/words/sync', '/words/random',
   '/words/grammar-seed', '/words', '/words/x',
@@ -148,5 +148,15 @@ describe('Lectures : authentification obligatoire', () => {
     const { env } = createEnv();
     expect((await call(env, '/content?profileId=default')).status).toBe(200);
     expect((await call(env, '/srs/stats?profileId=default')).status).toBe(200);
+  });
+});
+
+describe('Fonctionnalité séries retirée', () => {
+  it('ne conserve ni routes SRT ni tables actives', async () => {
+    const { env, db } = createEnv();
+    expect((await call(env, '/srt/sources')).status).toBe(404);
+    expect((await call(env, '/srt/import-folder', { method: 'POST', body: {} })).status).toBe(404);
+    expect(db.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'srt_%'").all())
+      .toEqual([]);
   });
 });

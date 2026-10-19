@@ -104,6 +104,33 @@ describe('indexation et recherche par le sens', () => {
     expect(store.size).toBe(before - 1);
   });
 
+  it('masque puis purge les anciens vecteurs de la bibliothèque SRT', async () => {
+    const { env, db, store } = semanticEnv();
+    const vectorId = 'legacy-srt-vector';
+    store.set(vectorId, {
+      id: vectorId,
+      values: fakeEmbedding('Where are you going?'),
+      metadata: {
+        source: 'srt',
+        refId: 'scene-1',
+        parentId: 'episode-1',
+        title: 'Ancienne série',
+        text: 'Where are you going?',
+      },
+    });
+    db.sqlite.prepare(`
+      INSERT INTO semantic_index (vector_id, source, ref_id, parent_id, text_hash)
+      VALUES (?, 'srt', 'scene-1', 'episode-1', 'legacy')
+    `).run(vectorId);
+
+    const search = await (await call(env, '/search/semantic?q=where')).json() as { results: unknown[] };
+    expect(search.results).toEqual([]);
+    expect(await (await call(env, '/admin/semantic/index', { method: 'POST' })).json()).toMatchObject({ purged: 1 });
+    expect(store.has(vectorId)).toBe(false);
+    expect(db.sqlite.prepare('SELECT COUNT(*) AS count FROM semantic_index WHERE vector_id = ?').get(vectorId))
+      .toMatchObject({ count: 0 });
+  });
+
   it('refuse l’indexation sans authentification et une requête trop courte', async () => {
     const { env } = semanticEnv();
     expect((await call(env, '/admin/semantic/index', { method: 'POST', auth: false })).status).toBe(401);

@@ -83,13 +83,6 @@ import {
   handleRecommendEpisodes,
 } from './podcastFeeds';
 import {
-  handleImportSrtFolder,
-  handleListSrtEpisodes,
-  handleListSrtR2Objects,
-  handleListSrtScenes,
-  handleListSrtSources,
-} from './srtLibrary';
-import {
   handleGetReadingLibrarySegments,
   handleListReadingLibraryItems,
   handlePrepareNextReadingItems,
@@ -349,17 +342,6 @@ export default {
     }
     if (method === 'POST' && path.match(/^\/podcast-feeds\/episodes\/[^/]+\/lesson$/)) {
       return handleGenerateEpisodeLesson(req, env, path.split('/')[3]);
-    }
-
-    // ── SRT personnel → scènes authentiques privées ───────────────────────
-    if (method === 'GET' && path === '/srt/sources') return handleListSrtSources(req, env);
-    if (method === 'GET' && path === '/srt/r2-objects') return handleListSrtR2Objects(req, env);
-    if (method === 'POST' && path === '/srt/import-folder') return handleImportSrtFolder(req, env);
-    if (method === 'GET' && path.match(/^\/srt\/sources\/[^/]+\/episodes$/)) {
-      return handleListSrtEpisodes(req, env, path.split('/')[3]);
-    }
-    if (method === 'GET' && path.match(/^\/srt\/episodes\/[^/]+\/scenes$/)) {
-      return handleListSrtScenes(req, env, path.split('/')[3]);
     }
 
     // ── Enrichissements versionnés du vocabulaire ────────────────────────
