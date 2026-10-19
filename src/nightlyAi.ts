@@ -74,7 +74,7 @@ export function normalizeGeneratedCard(raw: unknown, lemma: string): Regenerated
 export async function regenerateLingvistCards(env: Env, limit: number): Promise<number> {
   const { results } = await env.DB.prepare(`
     SELECT c.id, c.profile_id, c.word_id, c.lemma, c.target_pos, c.sentence_full,
-           w.traduction, w.niveau, w.type, ve.data AS enrichment_data
+           w.traduction, w.niveau, w.type, ve.data AS enrichment_data, ve.version AS enrichment_version
     FROM lingvist_cards c
     JOIN words w ON w.id = c.word_id
     LEFT JOIN vocabulary_enrichments ve ON ve.word_id = w.id
@@ -83,12 +83,12 @@ export async function regenerateLingvistCards(env: Env, limit: number): Promise<
     LIMIT ?
   `).bind(LINGVIST_SCHEMA_VERSION, limit).all<{
     id: string; profile_id: string; word_id: string; lemma: string; target_pos: string; sentence_full: string;
-    traduction: string | null; niveau: string; type: string | null; enrichment_data: string | null;
+    traduction: string | null; niveau: string; type: string | null; enrichment_data: string | null; enrichment_version: number | null;
   }>();
 
   let regenerated = 0;
   for (const card of results) {
-    const enrichment = toVocabularyEnrichmentDto({ enrichment_data: card.enrichment_data });
+    const enrichment = toVocabularyEnrichmentDto({ enrichment_data: card.enrichment_data, enrichment_version: card.enrichment_version });
     const translation = enrichment?.primaryTranslation || card.traduction || '';
     const raw = await runChat(env, MODELS.quality, [
       { role: 'system', content: 'Tu écris des phrases d’exercice de vocabulaire anglais pour un francophone. Réponds seulement en JSON valide.' },
@@ -110,12 +110,12 @@ export async function regenerateLingvistCards(env: Env, limit: number): Promise<
       UPDATE lingvist_cards SET
         example_en = ?, expected_answer = ?, sentence_with_gap = ?, sentence_full = ?, translation_fr = ?,
         word_traduction_fr = ?, grammar_hint = ?, verb_form_label = COALESCE(?, verb_form_label),
-        source = 'remote', updated_at = datetime('now')
+        source = 'remote', enrichment_version = ?, updated_at = datetime('now')
       WHERE id = ?
     `).bind(
       generated.sentenceFull, generated.expectedAnswer, generated.sentenceWithGap, generated.sentenceFull,
       generated.translationFr, translation || null, generated.grammarHint,
-      card.target_pos === 'verb' ? generated.verbFormLabel : null, card.id,
+      card.target_pos === 'verb' ? generated.verbFormLabel : null, enrichment?.version ?? null, card.id,
     ).run();
     regenerated += 1;
   }

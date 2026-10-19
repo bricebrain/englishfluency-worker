@@ -85,6 +85,7 @@ interface CardRow {
   input_placeholder: string;
   source: string;
   schema_version: number;
+  enrichment_version: number | null;
 }
 
 interface PreparedCard {
@@ -102,6 +103,7 @@ interface PreparedCard {
   inputPlaceholder: string;
   source: 'remote' | 'local';
   schemaVersion: number;
+  enrichmentVersion?: number | null;
   qualityReasons?: string[];
   qualityScore?: number;
   qualityStatus?: 'valid' | 'rebuilt' | 'needs_regeneration';
@@ -381,6 +383,7 @@ function buildLocalPreparedCard(word: PreparedWord): PreparedCard {
     inputPlaceholder: targetPos === 'verb' ? 'Ecris la bonne forme verbale' : 'Ecris le mot manquant',
     source: 'local',
     schemaVersion: SCHEMA_VERSION,
+    enrichmentVersion: word.enrichment?.version ?? null,
     qualityReasons: [],
     qualityScore: 0.72,
     qualityStatus: 'rebuilt',
@@ -607,6 +610,7 @@ function serializeCard(row: CardRow): PreparedCard {
     inputPlaceholder: row.input_placeholder,
     source: row.source === 'remote' ? 'remote' : 'local',
     schemaVersion: row.schema_version,
+    enrichmentVersion: row.enrichment_version ?? null,
   };
 }
 
@@ -718,8 +722,8 @@ function upsertCardStatement(env: Env, profileId: string, card: PreparedCard): D
     INSERT INTO lingvist_cards (
       id, profile_id, word_id, example_en, lemma, target_pos, verb_form_label,
       expected_answer, sentence_with_gap, sentence_full, translation_fr,
-      word_traduction_fr, grammar_hint, input_placeholder, source, schema_version, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      word_traduction_fr, grammar_hint, input_placeholder, source, schema_version, enrichment_version, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       example_en=excluded.example_en, lemma=excluded.lemma,
       target_pos=excluded.target_pos, verb_form_label=excluded.verb_form_label,
@@ -728,6 +732,7 @@ function upsertCardStatement(env: Env, profileId: string, card: PreparedCard): D
       word_traduction_fr=excluded.word_traduction_fr,
       grammar_hint=excluded.grammar_hint, input_placeholder=excluded.input_placeholder,
       source=excluded.source, schema_version=excluded.schema_version,
+      enrichment_version=excluded.enrichment_version,
       updated_at=datetime('now')
   `).bind(
     `${profileId}_${card.wordId}`,
@@ -746,6 +751,7 @@ function upsertCardStatement(env: Env, profileId: string, card: PreparedCard): D
     card.inputPlaceholder,
     card.source,
     card.schemaVersion,
+    card.enrichmentVersion ?? null,
   );
 }
 

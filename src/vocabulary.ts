@@ -1,6 +1,18 @@
 import type { Env, WordRow } from './types';
 import { rowToWord } from './types';
 import { json, err, isAuthorized } from './utils';
+import {
+  ENRICHMENT_JOIN_SQL,
+  ENRICHMENT_SELECT_SQL,
+  toVocabularyEnrichmentDto,
+  type EnrichmentColumns,
+} from './vocabularyEnrichmentMapper';
+
+type EnrichedWordRow = WordRow & EnrichmentColumns;
+
+function publicWord(row: EnrichedWordRow) {
+  return { ...rowToWord(row), enrichment: toVocabularyEnrichmentDto(row) };
+}
 
 const VALID_NIVEAUX = new Set(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']);
 const MAX_BULK_DELETE = 200;
@@ -14,11 +26,11 @@ export async function handleGetWords(req: Request, env: Env): Promise<Response> 
   const offset = Math.max(Number(url.searchParams.get('offset') ?? '0'),   0);
 
   const query = niveau && VALID_NIVEAUX.has(niveau)
-    ? env.DB.prepare('SELECT * FROM words WHERE niveau = ? ORDER BY frequence DESC, mot ASC LIMIT ? OFFSET ?').bind(niveau, limit, offset)
-    : env.DB.prepare('SELECT * FROM words ORDER BY niveau ASC, frequence DESC, mot ASC LIMIT ? OFFSET ?').bind(limit, offset);
+    ? env.DB.prepare(`SELECT w.*, ${ENRICHMENT_SELECT_SQL} FROM words w ${ENRICHMENT_JOIN_SQL} WHERE w.niveau = ? ORDER BY w.frequence DESC, w.mot ASC LIMIT ? OFFSET ?`).bind(niveau, limit, offset)
+    : env.DB.prepare(`SELECT w.*, ${ENRICHMENT_SELECT_SQL} FROM words w ${ENRICHMENT_JOIN_SQL} ORDER BY w.niveau ASC, w.frequence DESC, w.mot ASC LIMIT ? OFFSET ?`).bind(limit, offset);
 
-  const { results } = await query.all<WordRow>();
-  return json({ words: results.map(rowToWord), count: results.length, offset, limit });
+  const { results } = await query.all<EnrichedWordRow>();
+  return json({ words: results.map(publicWord), count: results.length, offset, limit });
 }
 
 // ── GET /words/count ────────────────────────────────────────────────────────
@@ -46,9 +58,9 @@ export async function handleSync(req: Request, env: Env): Promise<Response> {
 
 // ── GET /words/:id ──────────────────────────────────────────────────────────
 export async function handleGetWord(id: string, env: Env): Promise<Response> {
-  const row = await env.DB.prepare('SELECT * FROM words WHERE id = ?').bind(id).first<WordRow>();
+  const row = await env.DB.prepare(`SELECT w.*, ${ENRICHMENT_SELECT_SQL} FROM words w ${ENRICHMENT_JOIN_SQL} WHERE w.id = ?`).bind(id).first<EnrichedWordRow>();
   if (!row) return err('Mot introuvable', 404);
-  return json(rowToWord(row));
+  return json(publicWord(row));
 }
 
 // ── DELETE /words ──────────────────────────────────────────────────────────

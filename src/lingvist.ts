@@ -72,6 +72,7 @@ export async function handleUpsertLingvistCard(req: Request, env: Env, wordId: s
       word_traduction_fr=excluded.word_traduction_fr,
       grammar_hint=excluded.grammar_hint, input_placeholder=excluded.input_placeholder,
       source=excluded.source, schema_version=excluded.schema_version,
+      enrichment_version=NULL,
       updated_at=datetime('now')
   `).bind(
     id, body.profileId, wordId, body.exampleEn, body.lemma,

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { regenerateLingvistCards } from '../src/nightlyAi';
 import { toVocabularyEnrichmentDto } from '../src/vocabularyEnrichmentMapper';
 import { call, createEnv } from './support/env';
 
@@ -38,9 +39,8 @@ function entry(word: SourceWord) {
 }
 
 /** Publie un enrichissement (50 premiers mots, ou les ids donnés) et renvoie les ids. */
-async function publish(env: ReturnType<typeof createEnv>['env'], db: Db, ids?: string[]) {
+async function publish(env: ReturnType<typeof createEnv>['env'], db: Db, ids?: string[], batchId = 'batch-join') {
   const sources = ids ? wordsById(db, ids.slice(0, 50)) : words(db);
-  const batchId = 'batch-join';
   const response = await call(env, `/admin/vocabulary/batches/${batchId}/publish`, {
     method: 'POST', body: { schemaVersion: 1, batchId, entries: sources.map(entry) },
   });
@@ -68,6 +68,124 @@ function expectPublicEnrichment(word: ApiWord) {
 }
 
 describe('enrichissements joints aux routes d’apprentissage', () => {
+  it('/words et /words/:id exposent le contrat public avec repli historique', async () => {
+    const { env, db } = createEnv();
+    const published = await publish(env, db);
+    const source = words(db, 1)[0]!;
+    const detail = await (await call(env, `/words/${source.id}`)).json() as ApiWord;
+    expectPublicEnrichment(detail);
+    expect(detail.traduction).toBe(source.traduction);
+    for (const path of ['/words?limit=1000', `/words?niveau=${source.niveau}&limit=1000`]) {
+      const { words: list } = await (await call(env, path)).json() as { words: ApiWord[] };
+      expect(list.some((word) => published.has(word.id))).toBe(true);
+      list.forEach((word) => {
+        if (published.has(word.id)) expectPublicEnrichment(word);
+        else expect(word.enrichment).toBeNull();
+      });
+    }
+    expect((await call(env, '/words/absent')).status).toBe(404);
+  });
+
+  it('une nouvelle publication ne recrée pas les cartes et conserve toute la progression', async () => {
+    const { env, db } = createEnv();
+    const path = '/lingvist/session?profileId=default&limit=80';
+    const before = await (await call(env, path)).json() as { words: ApiWord[]; cards: { wordId: string; qualityReasons: string[] }[] };
+    const ids = before.words.map((word) => word.id);
+    const progress = () => db.sqlite.prepare('SELECT * FROM word_progress ORDER BY profile_id, word_id').all();
+    const validIds = before.cards.filter((card) => !card.qualityReasons.length).map((card) => card.wordId);
+    expect(validIds.length).toBeGreaterThan(0);
+    const cards = () => db.sqlite.prepare(`SELECT * FROM lingvist_cards WHERE word_id IN (${validIds.map(() => '?').join(',')}) ORDER BY id`).all(...validIds);
+    const review = await call(env, '/srs/review', { method: 'POST', body: {
+      profileId: 'default', wordId: ids[0], word: {
+        id: ids[0], prochaine_revision: '2020-01-01', intervalle: 3, facilite: 2.6,
+        repetitions: 2, derniere_revision: '2020-01-01', seen_count: 4,
+        success_count: 2, almost_count: 1, fail_count: 1, level: 2, status: 'learning',
+        review_history: [], lastGrade: 'good',
+      }, day: '2026-10-19', count: 1, result: 'success',
+    } });
+    expect(review.status).toBe(200);
+    const initialProgress = progress();
+    expect(initialProgress.length).toBeGreaterThan(0);
+    const initialCards = cards();
+    await publish(env, db, ids);
+    await call(env, path);
+    // Deuxième publication : même correction, nouvelle version de l’atelier.
+    await publish(env, db, ids, 'batch-join-v2');
+    const refreshed = await (await call(env, path)).json() as { words: ApiWord[] };
+    expect(refreshed.words.some((word) => word.enrichment?.version === 2)).toBe(true);
+    expect(progress()).toEqual(initialProgress);
+    expect(cards()).toEqual(initialCards);
+  });
+
+  it('les nouvelles cartes mémorisent la version publiée, les anciennes restent identiques', async () => {
+    const { env, db } = createEnv();
+    const probe = createEnv();
+    const candidates = await (await call(probe.env, '/lingvist/session?profileId=default&limit=80')).json() as { words: ApiWord[] };
+    await publish(env, db, candidates.words.map((word) => word.id));
+    const response = await (await call(env, '/lingvist/session?profileId=default&limit=80')).json() as {
+      cards: { wordId: string; enrichmentVersion: number | null }[];
+    };
+    expect(response.cards.some((card) => card.enrichmentVersion === 1)).toBe(true);
+    for (const card of response.cards) {
+      const enrichment = db.sqlite.prepare('SELECT version FROM vocabulary_enrichments WHERE word_id = ?').get(card.wordId) as { version: number } | undefined;
+      expect(card.enrichmentVersion).toBe(enrichment?.version ?? null);
+      const stored = db.sqlite.prepare('SELECT enrichment_version FROM lingvist_cards WHERE word_id = ?').get(card.wordId) as { enrichment_version: number | null };
+      expect(stored.enrichment_version).toBe(card.enrichmentVersion);
+    }
+  });
+
+  it('« Je connais » conserve le mot publié et son enrichissement', async () => {
+    const { env, db } = createEnv();
+    await publish(env, db);
+    const source = words(db, 1)[0]!;
+    const before = await (await call(env, `/words/${source.id}`)).json();
+    const response = await call(env, '/srs/known', { method: 'POST', body: {
+      profileId: 'default', wordIds: [source.id], source: 'user_marked_known',
+    } });
+    expect(response.status).toBe(200);
+    const after = await (await call(env, `/words/${source.id}`)).json();
+    expect(after).toEqual(before);
+    const progress = db.sqlite.prepare('SELECT status FROM word_progress WHERE word_id = ?').get(source.id) as { status: string };
+    expect(progress.status).toBe('known');
+  });
+
+  it('un import externe de carte retire une ancienne version devenue inconnue', async () => {
+    const { env, db } = createEnv();
+    const source = words(db, 1)[0]!;
+    const body = { profileId: 'default', exampleEn: 'Prices range from 10 to 20.',
+      lemma: 'range', expectedAnswer: 'range', sentenceWithGap: 'Prices ____ from 10 to 20.',
+      sentenceFull: 'Prices range from 10 to 20.', translationFr: 'Les prix varient.',
+      grammarHint: '', inputPlaceholder: 'Mot',
+    };
+    const path = `/lingvist/card/${source.id}`;
+    expect((await call(env, path, { method: 'PUT', body })).status).toBe(200);
+    db.sqlite.prepare('UPDATE lingvist_cards SET enrichment_version = 1 WHERE word_id = ?').run(source.id);
+    expect((await call(env, path, { method: 'PUT', body })).status).toBe(200);
+    const stored = db.sqlite.prepare('SELECT enrichment_version FROM lingvist_cards WHERE word_id = ?').get(source.id) as { enrichment_version: number | null };
+    expect(stored.enrichment_version).toBeNull();
+  });
+
+  it('la régénération simulée trace la version réellement fournie au modèle', async () => {
+    const { env, db } = createEnv();
+    const source = db.sqlite.prepare("SELECT id FROM words WHERE mot = 'range' LIMIT 1").get() as { id: string };
+    await publish(env, db, [source.id]);
+    await call(env, `/lingvist/card/${source.id}`, { method: 'PUT', body: {
+      profileId: 'default', exampleEn: 'Prices range from ten to twenty euros.',
+      lemma: 'range', expectedAnswer: 'range', sentenceWithGap: 'Prices ____ from ten to twenty euros.',
+      sentenceFull: 'Prices range from ten to twenty euros.', translationFr: 'Les prix varient.',
+      grammarHint: '', inputPlaceholder: 'Mot', source: 'local', schemaVersion: 4,
+    } });
+    const run = vi.fn(async () => ({ response: {
+      sentenceEn: 'Prices ranged from ten to twenty euros last summer.', answer: 'ranged',
+      translationFr: 'Les prix allaient de dix à vingt euros.', grammarHintFr: 'Prétérit', verbFormLabel: 'prétérit',
+    } }));
+    Object.assign(env, { AI: { run } });
+    expect(await regenerateLingvistCards(env, 1)).toBe(1);
+    const stored = db.sqlite.prepare('SELECT enrichment_version, expected_answer FROM lingvist_cards WHERE word_id = ?').get(source.id);
+    expect(stored).toMatchObject({ enrichment_version: 1, expected_answer: 'ranged' });
+    expect(JSON.stringify(run.mock.calls)).toContain('traduction corrigée de range');
+  });
+
   it('/srs/triage joint l’enrichissement, sans toucher au mot historique', async () => {
     const { env, db } = createEnv();
     const published = await publish(env, db);
