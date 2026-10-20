@@ -152,7 +152,12 @@ describe('Lectures : authentification obligatoire', () => {
 });
 
 describe('Fonctionnalité séries retirée', () => {
-  // Les tables srt_* restent tant que la migration de suppression attend l'accord (migrations-en-attente/).
+  it('ne conserve aucune table srt_* après les migrations', async () => {
+    const { db } = createEnv();
+    const tables = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'srt_*'").all();
+    expect(tables.results).toEqual([]);
+  });
+
   it('ne conserve aucune route SRT', async () => {
     const { env } = createEnv();
     expect((await call(env, '/srt/sources')).status).toBe(404);
